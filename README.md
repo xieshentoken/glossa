@@ -1,25 +1,32 @@
 # Glossa
 
 A desktop reader that explains difficult terms in place. Open a PDF, a Word
-document, Markdown/text, or a web page. Point at a term, press **Alt+Q**, adjust
-the selection with the arrow keys, and click a skill on the card that opens.
+document, Markdown/text, source code (Python, JSON, YAML, JavaScript …) or a web
+page. Point at a term, press **Alt+Q** and adjust the selection with the arrow
+keys: the card that opens starts the **Quick** explanation at once (Settings →
+General can turn that off), and its other skills run when clicked.
 Each pick gets its own card; earlier cards stay. A card keeps every skill run
 started from it, can be dragged, resized, minimized and closed, and belongs to
 its document: switching documents shows that document's cards.
 
-Plan and roadmap: [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md).
+Implementation notes: [`HANDOFF.md`](HANDOFF.md). Validation status:
+[`OPTIMIZATION_STATUS.md`](OPTIMIZATION_STATUS.md).
 
 ## Run
 
+Use Node.js 22.19+ (22.x) or 24.x. Run these commands in the project directory:
+
 ```bash
-npm install
+npm ci
 npx install-electron        # only if npm blocked Electron's download script
 npm start                   # build + launch
 ```
 
-On macOS, double-click [`启动 Glossa.command`](../../启动%20Glossa.command) in the
-project root. It opens this v2 folder using its own Electron runtime. After changing
-source code, run `npm run build` before using the launcher.
+`npm start` builds the current source and opens the desktop app. After changing
+source code, run it again to rebuild and launch the updated version.
+
+Configure credentials through Settings. Local settings, keys, task workspaces,
+exports and backups are not part of the source repository.
 
 Without an API key you can try everything with **Settings → Models & effort →
 Offline demo (no AI)**. For real answers add a key in **Settings → Model
@@ -72,9 +79,56 @@ needs a confirmation the app shows itself. Each card shows where a request goes 
 | Grow / shrink the start | `Shift+←` / `Shift+→` |
 | Explain / cancel | `Enter` or click the highlight / `Esc` |
 | Run a skill of the focused card / close the card | `1`–`9` / `Esc` |
+| Show the focused card's term in the document | `Alt+L` (change in Settings), or the ◎ button on the card |
+| Capture an area (text, a picture, a formula, a video frame) to explain | `Alt+A` (change in Settings), or the ⛶ button in the top bar; drag, `Esc` cancels |
 | Open file · Settings · Close tab | `Ctrl/Cmd+O` · `Ctrl/Cmd+,` · `Ctrl/Cmd+W` |
 
 With text already selected, the hotkey explains the selection at once.
+
+**Several documents side by side:** the panel buttons in the top bar switch between one panel,
+two (left and right) and three (left, middle and right). Each panel scrolls on its own; its header
+chooses which open document it shows, and clicking a tab or opening a file uses the selected panel.
+Term lookup works in every panel (Alt+Q picks where the mouse is), and explanation cards float over
+all panels. **Pinch to zoom** (two fingers on a trackpad or touchscreen, or Ctrl+scroll) scales the
+panel under the fingers; Ctrl+= / Ctrl+− / Ctrl+0 zoom the selected panel, never the whole window.
+
+**Cards:** rename a card with its ✎ button (the rest of the title bar moves the card). A finished
+explanation can be shown rendered (Markdown, or HTML when the answer is HTML) or as plain text with the
+button in its status bar. A run started by mistake stops with the Stop button in the card; the Tasks
+panel has Stop all.
+
+**Show in document:** the ◎ button in a card's title bar (or `Alt+L`, for the card used last, also
+while a web page has the keyboard) scrolls the card's document back to the exact place the term was
+picked and highlights it for a few seconds, keeping it clear of the card where there is room. A card
+remembers the term's text with what surrounds it and its position (and its page in a PDF), so the
+right occurrence is found even when the same word appears many times. Cards saved by older versions
+are found by their sentence.
+
+**Capturing an area:** `Alt+A` (or the ⛶ button) dims the reading area; drag over anything shown in a
+document or web page, including scanned pages, figures, formulas and video frames. Glossa takes a picture of
+that area and reads whatever text the document has there (PDF text, document or web text); a card opens with
+both and Quick starts at once. When the area held only text, only the text is sent, and any model can answer.
+Otherwise the picture goes along (the card says "· picture" under *Sends to*), which needs a model that can
+read images; a model Pi knows to be text-only gets the text alone, or a clear error when there is none. The
+card's ◎ finds the area again: its text, or where it was (its PDF page, its place in the document or page).
+Pictures are kept in the app's data folder while a card uses them.
+
+**Web pages and the keyboard:** Alt+Q works on the web page under the mouse even when Glossa itself has the
+keyboard (for example right after a card opened, which takes it): Glossa hands the key to the page, and the
+page takes the keyboard for ←/→ and Enter. Previously this did nothing until the page was clicked; YouTube
+descriptions and titles were the common case.
+
+**Source code and data files** (`.py`, `.js`/`.ts`, `.json`, `.yaml`/`.yml`, `.toml`, `.sh`, `.c`/`.cpp`,
+`.java`, `.go`, `.rs`, `.sql`, `.csv`, `Dockerfile`, `Makefile` and many more) open as numbered,
+monospaced lines; indentation is kept, minified JSON is indented. Lines are grouped at blank lines,
+and that block is the "paragraph" sent with a term. Local `.html` files show as the page, with a
+**Show source** button for their code. Code files up to 8 MB.
+
+**Saving results:** Settings → General → *Save results to* picks a folder (in the system dialog).
+Every finished result is then also copied there as `<document>/<term> - <skill>.md` (or `.html`; an
+HTML result with its own files becomes a folder). The same result is not written twice; a different
+one gets " (2)". Each skill can use the default folder, its own folder, or not be saved (Settings →
+Skills → Engine for this skill). The card links to the copy.
 
 **Appearance:** System, Light or Dark (the sun/moon button in the top bar, or Settings → General).
 System follows the operating system. Documents get a dark page in the dark theme; PDF pages can
@@ -102,7 +156,8 @@ glossa:
 Instructions for the model…
 ```
 
-- **Built in:** `quick-gloss` (a short answer, the **Quick** button) and `eli5`. Nothing runs until a skill is clicked.
+- **Built in:** `quick-gloss` (a short answer, the **Quick** button) and `eli5`. Quick starts by itself
+  when a card is created (Settings → General); every other skill runs when clicked.
 - **Anatomy** ([wheresryan22/anatomy](https://github.com/wheresryan22/anatomy)):
   **Settings → Skills → Install** clones it. It works in a job folder that contains
   the skill and the lookup context, by default with the built-in Pi agent (skills that
@@ -112,7 +167,9 @@ Instructions for the model…
   tool without limits (read, write, edit, shell, search) and there is **no OS-level
   sandbox** (see the status file). After that, built-in skills run when clicked; a
   skill you added asks once per version on Pi (per run, or "don't ask again", on an
-  external CLI). Nothing ever starts without a click.
+  external CLI). The only start without a click is Quick on a new card: it is a short
+  answer (never a job folder), and it never opens an approval dialog; a quick skill of
+  your own waits for its first click and approval.
 - HTML output needs a skill that works in a job folder. A short-answer skill set to
   HTML is refused with an explanation.
 - **Your own:** create them in Settings, or **Import folder** for any existing skill.
@@ -158,7 +215,14 @@ The smoke test launches the app twice on the same data folder.
     card's buttons on the built-in Pi agent (clicking a skill again returns to its run), a folder skill
     on Pi and through a fake harness CLI, and checks that Pi's worker processes exit;
   - checks the output protocol's CSP, the denied web permissions, IPC validation and the agent gate;
-  - checks a single-page-app route change and a settings change made through the UI.
+  - checks a single-page-app route change and a settings change made through the UI;
+  - captures areas: a PDF line (text and picture, found again from the last page), lines of code (text only,
+    no picture sent), web text and a web figure; Esc cancels a capture;
+  - on a web page, Alt+Q while a card holds the keyboard is handed to the page under the mouse;
+  - opens a Python file as numbered code, turns on the automatic Quick explanation in Settings and
+    checks it starts and its result is copied to the output folder, finds the term again with the
+    card's button and with Alt+L (code, and on page 2 of the 80-page PDF from its last page), and
+    shows a local HTML file as page and source.
 - **Second launch:** checks that cards are restored as left (including a minimized one), that a
   new Quick run is served from the cache, and that a deleted result shows a clear error.
 
@@ -169,9 +233,9 @@ CLI. They are not tests against real models. Options:
 - `GLOSSA_SMOKE_WEB_URL=https://…` tests a real page; by default the test serves
   a local fixture page.
 - `GLOSSA_NO_SANDBOX=1` passes `--no-sandbox`, for containers without the Chromium SUID sandbox.
-- `GLOSSA_SMOKE_NO_LOOPBACK=1` skips the steps that need a local HTTP server (web page, route
-  change, web permissions, model connections) on machines that refuse loopback connections; they
-  are logged as NOT RUN.
+- `GLOSSA_SMOKE_NO_LOOPBACK=1` skips the model connection steps, which need a local HTTP server, on
+  machines that refuse loopback connections; they are logged as NOT RUN. The web page steps always run:
+  their fixture page is served at `https://fixture.glossa.test/` inside the web view's own session.
 
 On bare Linux machines that lack Chromium's system libraries (`libnss3`,
 `libnspr4`, `libasound2`), put the `.so` files in `.devlibs/`. The smoke script adds
@@ -205,7 +269,10 @@ test/           unit tests + fixtures (fake agent CLI, PDF generator, sample doc
   confined to the app's folders, and imported skills may not contain links.
 - Document text is labelled as untrusted data in every prompt.
 - Every job is an agent job and needs: the one-time agent notice accepted, an explicit
-  click, and (except built-in skills on Pi) approval in a main-process dialog. Jobs run
+  click (the one exception: the quick skill on a new card, a short answer, which never shows an
+  approval dialog), and (except built-in skills on Pi) approval in a main-process dialog.
+- Output folders are only set from a main-process folder dialog; the renderer can clear
+  one but not name a new path. Copies use file names valid on every system. Jobs run
   in their own folder with an allow-listed environment and do not load the user's own
   Pi, MCP or CLI settings. Pi's tools are deliberately unrestricted. Jobs are **not**
   sandboxed by the OS: an agent can read what your user account can read.

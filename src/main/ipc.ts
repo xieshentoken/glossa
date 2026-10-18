@@ -8,14 +8,15 @@ import { ConnectionService } from './connections';
 import { connectionRequestId, connectionSave, connectionTest } from './connection-validation';
 import { IPC } from '../shared/api';
 import type { DocInfo } from '../shared/types';
-import { DocumentService } from './documents';
+import { CODE_EXTS, DocumentService, FILE_KINDS } from './documents';
 import { probeHarness } from './harness-probe';
 import { errorMessage, type JobManager } from './jobs';
+import { MAX_CAPTURE_SIDE } from './captures';
 import { createProvider } from './providers';
 import { authorizeSettingsPatch, type GrantConfirm } from './settings-policy';
 import type { SkillRegistry } from './skills';
 import type { Store } from './store';
-import { str, vAbsPath, vDocId, vJobId, vJobRequest, vModel, vParsedSkill, vProviderId, vSettingsPatch, vSkillName, vTermCards, vUrl } from './validate';
+import { str, vAbsPath, vCaptureId, vCaptureRect, vDocId, vJobId, vJobRequest, vModel, vParsedSkill, vProviderId, vSettingsPatch, vSkillName, vTermCards, vUrl } from './validate';
 
 export interface IpcDeps {
   win: () => BrowserWindow | null;
@@ -51,6 +52,19 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.settingsSet, async (raw) => {
     const patch = await authorizeSettingsPatch(store.getSettings(), vSettingsPatch(raw), d.confirmGrant);
     return store.setSettings(patch);
+  });
+  // Output folders are only ever set from this dialog (see assertOutputDirs).
+  handle(IPC.settingsChooseOutputDir, async (skill) => {
+    const name = skill === undefined || skill === null ? undefined : vSkillName(skill);
+    const w = d.win();
+    const cur = store.getSettings();
+    const r = w
+      ? await dialog.showOpenDialog(w, { properties: ['openDirectory', 'createDirectory'], title: 'Choose where results are saved', defaultPath: (name && cur.skillOverrides[name]?.outputDir) || cur.outputDir || app.getPath('documents') })
+      : { canceled: true, filePaths: [] };
+    if (r.canceled || !r.filePaths[0]) return null;
+    const dir = path.resolve(r.filePaths[0]);
+    if (!name) return store.setSettings({ outputDir: dir });
+    return store.setSettings({ skillOverrides: { ...cur.skillOverrides, [name]: { ...cur.skillOverrides[name], outputDir: dir } } });
   });
   handle(IPC.agentForgetTrust, () => store.setSettings({ agentTrust: {} }));
   handle(IPC.agentIsolation, () => jobs.isolation());
@@ -123,7 +137,11 @@ export function registerIpc(d: IpcDeps): void {
     if (!w) return [];
     const r = await dialog.showOpenDialog(w, {
       properties: ['openFile', 'multiSelections'],
-      filters: [{ name: 'Documents', extensions: ['pdf', 'docx', 'md', 'markdown', 'txt', 'html', 'htm'] }],
+      filters: [
+        { name: 'All supported files', extensions: Object.keys(FILE_KINDS).map((e) => e.slice(1)) },
+        { name: 'Documents', extensions: ['pdf', 'docx', 'md', 'markdown', 'txt', 'html', 'htm'] },
+        { name: 'Source code and data', extensions: [...CODE_EXTS, 'html', 'htm'] },
+      ],
     });
     if (r.canceled) return [];
     const out: DocInfo[] = [];
@@ -140,6 +158,21 @@ export function registerIpc(d: IpcDeps): void {
     return remember(await docs.describeFile(vAbsPath(info.source)));
   });
   handle(IPC.docsLoad, (id) => docs.load(vDocId(id)));
+  // Only the app's own window is captured, and only what it shows: the reader dragged over this area.
+  handle(IPC.captureArea, async (raw) => {
+    const w = d.win();
+    if (!w) throw new Error('No window');
+    const r = vCaptureRect(raw);
+    const [cw, ch] = w.getContentSize();
+    const rect = { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(Math.min(r.width, cw - r.x)), height: Math.round(Math.min(r.height, ch - r.y)) };
+    if (rect.width < 4 || rect.height < 4) throw new Error('The area is too small.');
+    let img = await w.webContents.capturePage(rect);
+    const { width, height } = img.getSize();
+    if (Math.max(width, height) > MAX_CAPTURE_SIDE) img = img.resize(width >= height ? { width: MAX_CAPTURE_SIDE, quality: 'best' } : { height: MAX_CAPTURE_SIDE, quality: 'best' });
+    const size = img.getSize();
+    return { id: store.captures.save(img.toPNG()), w: size.width, h: size.height };
+  });
+  handle(IPC.capturePicture, (id) => store.captures.dataUrl(vCaptureId(id)));
   handle(IPC.docsSetText, (id, text, title) => {
     const docId = vDocId(id);
     docs.setText(docId, str(text, 'text', 5_000_000));
@@ -155,6 +188,12 @@ export function registerIpc(d: IpcDeps): void {
   handle(IPC.jobsStart, (raw) => jobs.start(vJobRequest(raw)));
   handle(IPC.jobsCancel, (id) => jobs.cancel(vJobId(id)));
   handle(IPC.jobsGet, (id) => jobs.get(vJobId(id)));
+  handle(IPC.jobsOutputText, (id) => jobs.outputText(vJobId(id)));
+  handle(IPC.jobsShowSaved, (id) => {
+    const p = jobs.savedCopy(vJobId(id));
+    if (p) shell.showItemInFolder(p);
+    return !!p;
+  });
 
   handle(IPC.appWebviewPreload, () => `file://${d.webviewPreload}`);
   handle(IPC.appOpenExternal, async (url) => {

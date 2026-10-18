@@ -22,6 +22,9 @@ import {
   type Rect,
   type TermCard,
   type TermContext,
+  type TermLocator,
+  type CardCapture,
+  type Region,
 } from '../shared/types';
 
 export class InvalidArgument extends Error {
@@ -67,6 +70,7 @@ function oneOf<T extends string>(v: unknown, what: string, values: readonly T[])
 }
 
 export const JOB_ID = /^[a-z0-9-]{8,64}$/;
+export const CAPTURE_ID = /^[a-f0-9]{64}$/;
 export const DOC_ID = /^[a-f0-9]{64}$/;
 const ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
@@ -75,6 +79,7 @@ const LANG = /^(ui|[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*)$/;
 
 export const vJobId = (v: unknown) => str(v, 'job id', 64, JOB_ID);
 export const vDocId = (v: unknown) => str(v, 'document id', 64, DOC_ID);
+export const vCaptureId = (v: unknown) => str(v, 'picture id', 64, CAPTURE_ID);
 export const vSkillName = (v: unknown) => str(v, 'skill name', 64, SKILL_NAME_RE);
 export const vProviderId = (v: unknown) => str(v, 'provider id', 40, ID);
 export const vModel = (v: unknown) => str(v, 'model', 200, MODEL);
@@ -130,7 +135,7 @@ function vAgentPartial(v: unknown, what: string): Partial<AgentEngine> | undefin
 }
 
 export function vJobRequest(v: unknown): JobRequest {
-  const o = obj(v, 'request', ['docId', 'skill', 'context', 'explainLang', 'direct', 'agent', 'force', 'origin']);
+  const o = obj(v, 'request', ['docId', 'skill', 'context', 'explainLang', 'direct', 'agent', 'image', 'force', 'origin']);
   return {
     docId: vDocId(o.docId),
     skill: vSkillName(o.skill),
@@ -138,6 +143,7 @@ export function vJobRequest(v: unknown): JobRequest {
     explainLang: str(o.explainLang, 'answer language', 40, LANG),
     direct: vDirectPartial(o.direct, 'direct engine'),
     agent: vAgentPartial(o.agent, 'agent engine'),
+    image: o.image === undefined ? undefined : vCaptureId(o.image),
     force: optBool(o.force, 'force'),
     origin: o.origin === undefined ? 'auto' : oneOf(o.origin, 'origin', ['user', 'auto'] as const),
   };
@@ -155,10 +161,42 @@ function vRect(v: unknown, what: string): Rect {
   };
 }
 
+function vLocator(v: unknown): TermLocator | undefined {
+  if (v === undefined) return undefined;
+  const o = obj(v, 'term location', ['quote', 'prefix', 'suffix', 'index', 'page', 'region']);
+  return {
+    quote: str(o.quote, 'located term', 600),
+    prefix: str(o.prefix, 'text before the term', 200),
+    suffix: str(o.suffix, 'text after the term', 200),
+    index: o.index === undefined ? undefined : num(o.index, 'term position', 0, 1e9),
+    page: o.page === undefined ? undefined : num(o.page, 'page', 1, 1e6),
+    region: o.region === undefined ? undefined : vRegion(o.region),
+  };
+}
+
+function vRegion(v: unknown): Region {
+  const r = obj(v, 'area', ['x', 'y', 'w', 'h', 'px']);
+  const px = r.px === undefined ? undefined : bool(r.px, 'area unit');
+  const max = px ? 1e7 : 2;
+  return { x: num(r.x, 'area x', -max, max, false), y: num(r.y, 'area y', -max, max, false), w: num(r.w, 'area width', 0, max, false), h: num(r.h, 'area height', 0, max, false), ...(px ? { px } : {}) };
+}
+
+function vCapture(v: unknown): CardCapture | undefined {
+  if (v === undefined) return undefined;
+  const o = obj(v, 'picture', ['id', 'w', 'h', 'send']);
+  return { id: vCaptureId(o.id), w: num(o.w, 'picture width', 1, 10_000), h: num(o.h, 'picture height', 1, 10_000), send: bool(o.send, 'send picture') };
+}
+
+/** A rectangle of the window to capture, in CSS pixels. */
+export function vCaptureRect(v: unknown): { x: number; y: number; width: number; height: number } {
+  const o = obj(v, 'area', ['x', 'y', 'width', 'height']);
+  return { x: num(o.x, 'x', 0, 1e5, false), y: num(o.y, 'y', 0, 1e5, false), width: num(o.width, 'width', 4, 1e5, false), height: num(o.height, 'height', 4, 1e5, false) };
+}
+
 export function vTermCards(v: unknown): TermCard[] {
   if (!Array.isArray(v) || v.length > 200) fail('cards');
   return (v as unknown[]).map((c) => {
-    const o = obj(c, 'card', ['id', 'term', 'context', 'explainLang', 'rect', 'window', 'tasks', 'activeTask', 'createdAt']);
+    const o = obj(c, 'card', ['id', 'term', 'context', 'explainLang', 'rect', 'window', 'tasks', 'activeTask', 'createdAt', 'locator', 'capture']);
     if (!Array.isArray(o.tasks) || o.tasks.length > 50) fail('card tasks');
     return {
       id: str(o.id, 'card id', 64, CARD_ID),
@@ -179,6 +217,8 @@ export function vTermCards(v: unknown): TermCard[] {
       }),
       activeTask: optStr(o.activeTask, 'active task', 64, CARD_ID),
       createdAt: num(o.createdAt, 'createdAt', 0, 1e14),
+      locator: vLocator(o.locator),
+      capture: vCapture(o.capture),
     };
   });
 }
@@ -274,7 +314,7 @@ function vHarness(v: unknown): HarnessConfig {
 }
 
 function vOverride(v: unknown): SkillOverride {
-  const o = obj(v, 'skill override', ['enabled', 'order', 'runner', 'output', 'direct', 'agent']);
+  const o = obj(v, 'skill override', ['enabled', 'order', 'runner', 'output', 'direct', 'agent', 'outputDir']);
   return {
     enabled: optBool(o.enabled, 'enabled'),
     order: o.order === undefined ? undefined : num(o.order, 'order', 0, 10_000),
@@ -282,7 +322,15 @@ function vOverride(v: unknown): SkillOverride {
     output: o.output === undefined ? undefined : oneOf(o.output, 'output', ['markdown', 'html'] as const),
     direct: vDirectPartial(o.direct, 'direct override'),
     agent: vAgentPartial(o.agent, 'agent override'),
+    // Which folders are allowed is checked against the stored settings (settings-policy.ts).
+    outputDir: o.outputDir === undefined ? undefined : vOutputDir(o.outputDir),
   };
+}
+
+/** '' or an absolute path; settings-policy.ts only lets through folders chosen in the main-process dialog. */
+function vOutputDir(v: unknown): string {
+  const p = str(v, 'output folder', 4096);
+  return p === '' ? p : vAbsPath(p);
 }
 
 /** Keys the renderer may never set: they are written by the main process only. */
@@ -290,14 +338,18 @@ export const MAIN_ONLY_SETTINGS = ['agentTrust', 'settingsVersion'] as const;
 
 export function vSettingsPatch(v: unknown): Partial<Settings> {
   const o = obj(v, 'settings', [
-    'uiLang', 'explainLang', 'hotkey', 'quickSkill', 'dataScope', 'profile', 'theme', 'pdfDim',
+    'uiLang', 'explainLang', 'hotkey', 'locateHotkey', 'captureHotkey', 'quickSkill', 'autoQuick', 'outputDir', 'dataScope', 'profile', 'theme', 'pdfDim',
     'agentConcurrency', 'agentsEnabled', 'requireIsolation', 'providers', 'harnesses', 'defaults', 'skillOverrides',
   ]);
   const p: Partial<Settings> = {};
   if (o.uiLang !== undefined) p.uiLang = oneOf(o.uiLang, 'interface language', UI_LANGS);
   if (o.explainLang !== undefined) p.explainLang = str(o.explainLang, 'explanation language', 40, LANG);
   if (o.hotkey !== undefined) p.hotkey = parseHotkey(str(o.hotkey, 'hotkey', 40)) ? (o.hotkey as string) : fail('hotkey');
+  if (o.locateHotkey !== undefined) p.locateHotkey = parseHotkey(str(o.locateHotkey, 'hotkey', 40)) ? (o.locateHotkey as string) : fail('hotkey');
+  if (o.captureHotkey !== undefined) p.captureHotkey = parseHotkey(str(o.captureHotkey, 'hotkey', 40)) ? (o.captureHotkey as string) : fail('hotkey');
   if (o.quickSkill !== undefined) p.quickSkill = vSkillName(o.quickSkill);
+  if (o.autoQuick !== undefined) p.autoQuick = bool(o.autoQuick, 'automatic quick explanation');
+  if (o.outputDir !== undefined) p.outputDir = vOutputDir(o.outputDir);
   if (o.dataScope !== undefined) p.dataScope = oneOf(o.dataScope, 'data scope', DATA_SCOPES);
   if (o.profile !== undefined) p.profile = str(o.profile, 'profile', 2000);
   if (o.theme !== undefined) p.theme = oneOf(o.theme, 'theme', THEME_PREFS);

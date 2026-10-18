@@ -41,7 +41,7 @@ export const DEFAULT_HARNESSES: HarnessConfig[] = [
   },
 ];
 
-export const SETTINGS_VERSION = 4;
+export const SETTINGS_VERSION = 5;
 
 export function defaultSettings(uiLang: UiLang = 'en'): Settings {
   return {
@@ -49,7 +49,11 @@ export function defaultSettings(uiLang: UiLang = 'en'): Settings {
     uiLang,
     explainLang: 'ui',
     hotkey: 'Alt+Q',
+    locateHotkey: 'Alt+L',
+    captureHotkey: 'Alt+A',
     quickSkill: 'quick-gloss',
+    autoQuick: true,
+    outputDir: '',
     dataScope: 'paragraph',
     profile: '',
     theme: 'system',
@@ -86,7 +90,21 @@ export function migrateSettings(saved: LegacySettings): Partial<Settings> {
     s = { ...rest, settingsVersion: 2, dataScope: 'paragraph', prewarmDocuments: false, agentsEnabled: agentWarningAccepted === true, agentTrust: {} };
   }
   // v2 → v3 changed only model connections; their grants are kept.
-  return toV4(s);
+  if ((s.settingsVersion ?? 1) < 4) s = toV4(s);
+  return toV5(s);
+}
+
+/**
+ * v4 → v5: every skill runs on the built-in Pi agent with the same connection,
+ * model and effort as skill answers. Workspace skills no longer default to a
+ * separate engine (which could still name a Claude model) or to a CLI.
+ */
+function toV5(s: LegacySettings): Partial<Settings> {
+  return {
+    ...s,
+    settingsVersion: SETTINGS_VERSION,
+    ...(s.defaults ? { defaults: { ...s.defaults, agent: { ...s.defaults.agent, harnessId: 'pi', providerId: '', model: '', effort: 'default' } } } : {}),
+  };
 }
 
 /**
@@ -96,7 +114,7 @@ export function migrateSettings(saved: LegacySettings): Partial<Settings> {
  * prewarming are gone. Remembered approvals named a harness command, so they are
  * cleared; agentsEnabled (the risk notice) is kept.
  */
-function toV4(s: LegacySettings): Partial<Settings> {
+function toV4(s: LegacySettings): LegacySettings {
   const { autoQuickGloss: _auto, prewarmDocuments: _prewarm, ...rest } = s;
   const toPi = <T extends { harnessId?: string; model?: string; effort?: Settings['defaults']['agent']['effort'] }>(e: T | undefined): T | undefined =>
     e && e.harnessId && REMOVED_HARNESSES.includes(e.harnessId) ? { ...e, harnessId: 'pi', model: '', effort: 'default' } : e;

@@ -1,5 +1,38 @@
 # Glossa 稳定化记录（P0 / P1，2026-10-17）
 
+## v2.4 发布检查（2026-10-19，macOS arm64）
+
+- **隐私清理**：移除文档中的机器专属路径；安全测试中的密钥形状字符串改为明确的合成凭据。源码及原远端历史扫描未发现真实凭据或个人主机标识；保留上游作者 / 许可证及有意设计的负面测试。依赖、构建产物、用户配置、密钥、任务结果、截图和本机备份不属于发布内容，相关路径已加入 `.gitignore`。
+- **修复**：已验证连接中发现的模型思考强度原先只用于连接测试，实际 Pi 任务仍依赖旧配置标记，可能漏传所选强度；模型映射现读取已保存的能力信息。新增真实 worker + 本地 HTTP 夹具回归，验证指定强度发送、服务商默认不附加该参数。
+- **验证 PASS**：类型检查；20 个测试文件 / 258 项；构建；macOS Electron 44.8.0 两次启动冒烟，含阅读器、区域截图、文内定位、多栏缩放、卡片恢复、网页权限、缓存及模型配置完整路径。本轮未跳过本地模型连接步骤，未禁用 Electron 沙箱；使用独立临时用户目录及合成数据。
+- **依赖审计 OPEN**：`npm audit` 报告 3 条中危、0 条高危 / 严重，来自同一条 `mammoth → argparse → sprintf-js` 依赖链（[GHSA-hp3w-g68c-fv3c](https://github.com/advisories/GHSA-hp3w-g68c-fv3c)，审计时无补丁版本）。检查所装源码：`argparse` 由 Mammoth 的命令行入口使用；Glossa 只调用库的 `convertToHtml` / `extractRawText`，主进程构建未包含该调用。保留锁定依赖，不采用审计建议的破坏性 Mammoth 降级；后续跟进上游修复。
+- **边界**：未调用真实模型 / 付费账户，未验证真实密钥的系统钥匙串写入；Windows 未测。静态扫描不能证明不存在任何未知形式的敏感信息。下方各历史记录保留其当时的验证范围。
+
+<!-- round4-checkpoint:start -->
+## 第四轮：框选区域解释、网页取词焦点修复（2026-10-18，Linux arm64 无界面副本）
+
+- **YouTube 诊断**：联网加载 `youtube.com/watch?v=aircAruvnKk`（3Blue1Brown，公开视频）。① 把应用的取词代码直接注入页面：简介中取词成功（块为 `DIV#snippet`，216 字），页面无 shadow DOM。② 在应用真实的 webview 中：网页持有键盘时 Alt+Q + Enter 成功（折叠 / 展开的简介、标题均可）；**键盘在 Glossa 窗口（卡片获得焦点）而鼠标在网页上时 Alt+Q 无反应**——即缺陷所在。另发现：此时主窗口的取词在网页面板上会退回整个窗口，可能拾取界面中残留鼠标位置处的文字。诊断脚本保存在 `../.checkpoints/yt-diag/`（不属于应用代码，临时诊断模式已从 `smoke.ts` 移除）。
+- **修复**：`term-capture` 的 `root()` 返回 null 时不再退回整个窗口，并报告“未取到”（`onMiss`）；网页 preload 报告鼠标进出页面（`glossa:pointer`），主窗口未取到时把快捷键转交鼠标所在的网页（`glossa:pickHere`，网页随即获得键盘）。定位 / 框选快捷键在网页持有键盘时也会转交回主窗口。
+- **框选区域**：`Alt+A` / 顶栏按钮 → 全窗口遮罩拖动框选（Esc / 点击取消）→ 主进程 `capture:area` 只截取应用自己窗口的该矩形（含网页与视频画面，已实测），长边超过 1600 px 缩小，按内容哈希存于 `userData/captures/`（卡片不再引用且超过一天后清理）；各阅读器读取区域内文字（`shared/area-text.ts`：PDF 文本层、文档、代码、网页），按字符框判断是否在区域内。卡片：标题为区域文字（无文字时为“图片”），显示缩略图（点击放大），保存定位信息（首段文字 + 区域位置：PDF 为页内比例，文档为滚动内容比例，网页为页面 CSS 像素）。是否发送图片：区域内有图片 / 画布 / 视频 / SVG（PDF 一律有画布）或没有文字时发送，否则只发送文字。运行：`JobRequest.image` 进入缓存键与“发送至”说明（“· picture”）；简短回答以 Pi `prompt(text, { images })` 附图，任务目录技能与外部 CLI 写入 `area.png` 并在 `context.md` / 任务中说明；提示词说明图片同样是不可信内容。Pi 目录已知不能识图的模型：有文字则只发文字（进度中说明），否则报错，且在任何请求发出之前。
+- **冒烟测试的网页步骤不再依赖回环**：夹具页在 webview 自己的会话中以 `https://fixture.glossa.test/` 提供，网页、路由变化、网页权限步骤在本机首次实际运行并通过；`GLOSSA_SMOKE_NO_LOOPBACK` 只跳过模型连接步骤。
+- **验证**：`npm run typecheck` PASS；`npm test` 20 个文件 / 257 项 PASS（新增 `test/area-capture.test.ts` 10 项，含真实 Pi worker 附图、已知不能识图模型在发出前被拒）；`npm run build` PASS；Electron 冒烟两次启动 PASS。新增：PDF 第 2 页框选（文字 + 图片，速览自动运行且带图，卡片注明“· picture”，从最后一页定位回原处）；代码框选（只发文字）；Esc 取消不留卡片；网页卡片持有键盘时 Alt+Q 转交网页并生成卡片；网页文字区域（不发图）与 SVG 图形区域（发图，滚走后定位回原处）；网页中按 Alt+A 转交主窗口。截图：`../.checkpoints/feat5-20261018-063525/shots/10-area-pdf.png`、`10b-area-web.png`。
+- **NOT RUN**：真实识图模型的回答质量（冒烟使用离线演示模型，只验证图片确实附在请求中）；YouTube 上的修复只在诊断中验证了缺陷与转交路径的原理，冒烟以本地夹具页验证修复本身；模型连接步骤（本机拒绝回环）；macOS / Windows（含高分屏截图尺寸）。
+- **快照**：改前 `../.checkpoints/feat5-20261018-063525/before.tar.gz`，完成 `done.tar.gz`。
+<!-- round4-checkpoint:end -->
+
+<!-- round3-checkpoint:start -->
+## 第三轮：在文档中定位、源代码文件、结果保存位置、自动速览（2026-10-18，Linux arm64 无界面副本）
+
+- **在文档中定位**：取词时为卡片记录定位信息 `TermLocator`（术语原文、前后各约 48 字、去空白后的字符位置；PDF 另记页码），`src/shared/term-locate.ts` 在比较时忽略空白、软连字符与大小写，按前后文匹配度、再按位置距离选出正确的那一处。卡片标题栏 ◎ 按钮与 `Alt+L`（设置 `locateHotkey`；网页获得键盘时由 preload 转发；作用于最近使用的卡片）滚动到术语并高亮约 2.6 秒，尽量避开卡片本身；最大化 / 最小化的卡片先还原。PDF 先跳到所记页码，等该页文本层渲染后再定位；旧卡片没有定位信息时，按句子在所有页中查找。网页经 `glossa:locate` 在 webview 内完成。
+- **源代码文件**：新文档类型 `code`，约 100 种扩展名，另按文件名识别 `Dockerfile` / `Makefile` / `.gitignore` 等；带行号（CSS 计数器，不进入文本）的等宽显示，在空行处分块（作为发送的“段落”），保留缩进；压缩的 JSON 自动缩进；上限 8 MB。标签显示文件类型（PY / JSON / YAML…）。本地 `.html` 新增“显示源代码”切换。
+- **结果保存位置**：设置 `outputDir` 及每个技能的 `skillOverrides[name].outputDir`（未设 = 默认文件夹，`''` = 不保存）。路径只能由主进程文件夹对话框写入（`settings:chooseOutputDir`）；渲染进程只能清除或原样回传已存值（`assertOutputDirs`）。完成（及缓存命中）的结果复制为 `<文件夹>/<文档>/<术语> - <技能>.md|.html`，带附属文件的 HTML 结果复制为文件夹；内容相同不重复写，不同则加 “ (2)”；复制失败不影响结果本身（`saveError`）。卡片显示“已保存”链接，可在文件管理器中打开。
+- **自动速览（默认开启）**：设置 `autoQuick`，推翻阶段 3 “取消自动快速预览”。新卡片创建即以 `origin: 'auto'` 运行 `quickSkill`；主进程只放行“`autoQuick` 开启 + 速览技能 + 简短回答”这一种自动启动；自动启动从不弹出批准对话框（自己的速览技能需先点击批准一次），一次性 Agent 提示被拒后同一会话内不再因自动启动出现。
+- **顺带修复**：应用内阅读器的取词回调只在创建时绑定，之后更改解释语言等设置不会生效，现改为始终调用最新回调。两个快捷键相同会互相遮蔽，现由主进程拒绝。冒烟脚本中 Escape 与切换标签之间存在输入顺序竞争（偶发关闭一张卡片，4 次中出现 1 次），已加短暂等待。
+- **验证**：`npm run typecheck` PASS；`npm test` 19 个文件 / 247 项 PASS（新增 `test/reader-features.test.ts` 20 项）；`npm run build` PASS；Electron 冒烟（`GLOSSA_SMOKE_NO_LOOPBACK=1 GLOSSA_NO_SANDBOX=1`）两次启动 PASS，最终代码连续多次通过。新增步骤：Python 文件按行显示；在设置界面开启自动速览后，取词即自动运行速览且结果复制到输出文件夹；按钮与 `Alt+L` 均滚回术语并高亮、不被卡片遮挡；80 页 PDF 从最后一页回到第 2 页的术语；本地 HTML 页面 / 源代码切换；IPC 拒绝渲染进程直接设定输出路径。截图：`../.checkpoints/feat4-20261018-031502/shots/`（`9-*`、`6-settings-general`、`6-settings-skill-engine`）。
+- **NOT RUN**：网页中的定位（本环境拒绝回环连接，网页步骤整体跳过；代码路径与应用内阅读器共用 `term-locate.ts`）；文件夹对话框本身（无界面环境，冒烟在主进程侧按对话框的结果设定）；macOS / Windows。
+- **快照**：改前 `../.checkpoints/feat4-20261018-031502/before.tar.gz`，完成 `../.checkpoints/feat4-20261018-031502/done.tar.gz`（均不含 `node_modules`、`dist`）。
+<!-- round3-checkpoint:end -->
+
 <!-- multicard-pi-checkpoint:start -->
 ## 多卡片与内置 Pi：当前快照（见 [HANDOFF.md](HANDOFF.md)）
 
@@ -75,6 +108,18 @@
 - **NOT RUN**：macOS / Windows 上的原生外观（系统主题实时切换、原生对话框配色）；真实 Anatomy 页面在两种主题下的外观（其页面自带样式，生成后不随主题切换）。
 - **快照**：改前 `../.checkpoints/ui-20261017-210502/before-ui-polish.tar.gz`；完成 `../.checkpoints/ui-20261017-210502/ui-polish.tar.gz`。
 
+### 多栏阅读、双指缩放与卡片改进 —— PASS（2026-10-17，同一副本）
+
+- **多栏阅读**：顶栏切换 1 / 2 / 3 栏（单栏占满；双栏为左、右；三栏为左、中、右）。每栏独立滚动，栏头选择显示哪个已打开文档；点标签或打开文件进入当前选中的栏，空栏优先。所有文档始终挂载，布局只移动 / 隐藏其框架，切换布局不重新加载、不丢失位置（网页不重载）。Alt+Q 在鼠标所在的栏取词，卡片归属该栏的文档；所有可见文档的卡片浮于整个阅读区，可拖动、吸附、停靠如前。栏数记在本机（localStorage）。浅色 / 深色均适配。
+- **双指缩放**：每栏独立缩放（50%–300%）：触控板双指（Chromium 以 Ctrl+滚轮上报）、触摸屏双指（指针事件）、鼠标 Ctrl+滚轮，以手指位置为锚点。Ctrl+= / − / 0 由主进程拦截后作用于当前栏，窗口本身不再缩放（并锁定窗口级捏合缩放）。HTML / Word / Markdown 用 CSS zoom；PDF 先即时缩放，停止约 180ms 后按新比例重新渲染且保持阅读位置；网页用 webview 缩放，页面内的捏合由 webview preload 捕获上报。
+- **卡片**：标题改为文字，点 ✎ 才可重命名（其余标题栏均可拖动）；结果可在“渲染视图”（Markdown，或回答本身是 HTML 时按 HTML 渲染，仍在禁止脚本的查看器中）与“纯文本”之间切换；运行或排队时卡片内显示醒目的“停止”按钮，任务面板新增“全部停止”。
+- **Anatomy 统一**：内置 skill 一律由内置 Pi 运行，连接 / 模型 / effort 与其他 skill 相同（Models & effort → 简短回答，或该 skill 自己的选择，或卡片选项）；“任务目录 skill”只保留时间与预算限制，外部 CLI 只用于用户添加且明确选择 CLI 的 skill。原先 Pi 任务目录路径会回退到单独的 Agent 设置（旧默认 `claude-opus-5-5` / 内置 Anthropic 连接），这是 Anatomy 用到 Claude Opus 的来源；设置 v5 迁移清除这部分旧值。另：Pi 只在 Anthropic 订阅令牌（`sk-ant-oat…`）时附加“Claude Code”身份，普通 API key 不会。
+- **修复**：PDF 页宽于栏宽时左侧被裁且无法滚动（flex 居中溢出），改为 `align-items: safe center`。
+- **验证**：`npm run typecheck` PASS；`npm test` 18 个文件 / 227 项 PASS（新增布局分配、捏合 / 滚轮缩放、HTML 回答识别与渲染、Anatomy 统一与 v5 迁移）；`npm run build` PASS；Electron 冒烟浅色 / 深色各两次启动 PASS，新增：三栏左 / 中 / 右位置、右栏取词且卡片存入该文档、左栏 Ctrl+滚轮（真实输入）与中栏双指触摸缩放互不影响、Ctrl+0 / Ctrl+= 只作用于当前栏且窗口缩放仍为 1、✎ 重命名、卡片内停止与全部停止、HTML 结果纯文本 / 渲染切换、双栏左 / 右、回到单栏保留文档。截图：`../.checkpoints/cols-20261017-214946/{light,dark}/`。
+- **NOT RUN**：真实触控板 / 触摸屏硬件上的捏合手感与灵敏度（冒烟用合成触摸指针事件与 Ctrl+滚轮）；网页栏内的捏合（回环受限，网页步骤未运行）；macOS / Windows。
+- **OPEN**：卡片为浮动窗口，切换到多栏时原先按单栏摆放的卡片可能盖住其他栏，需要时可最小化或拖开；栏宽固定均分，暂不支持拖动调整栏宽。
+- **快照**：改前 `../.checkpoints/cols-20261017-214946/before.tar.gz`；完成 `../.checkpoints/cols-20261017-214946/done.tar.gz`。
+
 <!-- multicard-pi-checkpoint:end -->
 
 <!-- model-config-checkpoint:start -->
@@ -85,7 +130,7 @@
 - **阶段 3 PASS**：模型发现、模型级 effort、Responses / Gemini 适配、临时测试票据、取消 / 超时、所选组合试调和失败回滚。未知 effort 不发送参数；地址改变不能复用旧 key；命名配置不会用环境 key 替代丢失的 key。
 - **阶段 4 PASS**：配置编辑器、保存前草稿、测试后模型 / effort 联动、已保存配置引用、清除 key 和受引用检查保护的删除。中 / 英 / 德 / 法文案已同步。
 - **阶段 5 PASS**：`npm run typecheck`、`npm test`（14 个文件 / 187 项）、`npm run build` 全部通过；最终构建的 Electron 冒烟两阶段通过。通过实际双击脚本启动正式 v2，并用原生界面确认“设置 → 模型连接”；当前应用停留在该页面。
-- **桌面交互证据**：本地 HTTP 测试服务 + 临时用户目录，覆盖预设清单、错误 key、模型发现、effort 切换、地址变更使测试失效、验证保存、已保存配置实际解释、取消、控制台和 1024×768 布局、重启恢复。截图位于 `/var/folders/p4/xpgbyw151b1c6gj3g__0dv_w0000gp/T/glossa-smoke-uLMmic/shots`。Browser 插件未提供，使用项目既有 Electron 自动化与原生 CUA 核验。
+- **桌面交互证据**：本地 HTTP 测试服务 + 临时用户目录，覆盖预设清单、错误 key、模型发现、effort 切换、地址变更使测试失效、验证保存、已保存配置实际解释、取消、控制台和 1024×768 布局、重启恢复。截图保存在本机临时用户目录，未随源码发布。Browser 插件未提供，使用项目既有 Electron 自动化与原生 CUA 核验。
 - **OPEN / NOT RUN**：OpenCode Go 按已确认范围保留禁用预设，官方要求 coding-agent traffic，阅读器适用性未获确认；未向它发送 key。其他外部服务商未用真实 key 调用，API 账户权限、余额、服务可用性仍待用户逐项测试。原生钥匙串加密存储未做新真实密钥写入验收，Windows 未测。
 - **备份 / 回退**：项目根目录 `.checkpoints/20261017-215652/`，含改前 `before-model-config.tar.gz`、阶段 3 / 4 快照、原 Linux Electron 文件和受限权限的用户配置备份；最终源码 / 构建快照 `completed.tar.gz`。本目录未初始化 Git；没有提交或推送。应用依赖未新增，package-lock 保持改前内容。
 - **交付标识**：源码 SHA256 `c9fb43099f1d1b273b36af69ece87291847b0744558c8e320a44c93df0e3f57d`；`dist/main/main.js` SHA256 `b1d9a3aec2d17a78ffa1659112511b70e91552aa9ddfeb9f9f78251933dc7b84`。
@@ -93,7 +138,7 @@
 <!-- model-config-checkpoint:end -->
 
 
-基线快照（只读）：`/home/claudeuser/ext-src/glossa-baseline-20261017`。仓库不是 git 仓库，用 `diff -rq` 与此快照比较。
+原始基线来自独立只读快照，未随源码发布。对照自己的基线时，可使用 `git diff` 或 `diff -rq`。
 
 ## 验证级别说明
 

@@ -6,7 +6,7 @@ import type { ReactElement } from 'react';
 export type IconName =
   | 'close' | 'minimize' | 'maximize' | 'restore' | 'stop' | 'retry' | 'settings' | 'tasks'
   | 'sun' | 'moon' | 'system' | 'clock' | 'more' | 'open' | 'alert' | 'check'
-  | 'plus' | 'up' | 'down' | 'back' | 'forward' | 'edit';
+  | 'plus' | 'up' | 'down' | 'back' | 'forward' | 'edit' | 'text' | 'code' | 'layout1' | 'layout2' | 'layout3' | 'locate' | 'folder' | 'scan';
 
 const PATHS: Record<IconName, ReactElement> = {
   close: <path d="M18 6 6 18M6 6l12 12" />,
@@ -72,7 +72,31 @@ const PATHS: Record<IconName, ReactElement> = {
     </>
   ),
   check: <path d="M20 6 9 17l-5-5" />,
+  locate: (
+    <>
+      <circle cx="12" cy="12" r="7" />
+      <circle cx="12" cy="12" r="2.5" />
+      <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+    </>
+  ),
+  scan: <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M8 12h8" />,
+  folder: <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />,
   plus: <path d="M12 5v14M5 12h14" />,
+  text: <path d="M4 6h16M4 11h16M4 16h16M4 21h9" />,
+  code: <path d="m16 18 6-6-6-6M8 6l-6 6 6 6" />,
+  layout1: <rect x="3" y="4" width="18" height="16" rx="2" />,
+  layout2: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M12 4v16" />
+    </>
+  ),
+  layout3: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M9 4v16M15 4v16" />
+    </>
+  ),
   up: <path d="m18 15-6-6-6 6" />,
   down: <path d="m6 9 6 6 6-6" />,
   back: <path d="M19 12H5M12 19l-7-7 7-7" />,

@@ -12,6 +12,10 @@ import type { AgentEngine, DirectEngine, HarnessConfig, JobRequest, ProviderConf
 import { cacheKey, sha256 } from './cache';
 import { OUTPUT_FILES, unsupportedCombination } from './output-contract';
 import { selectedDirect } from '../shared/engine-selection';
+import { PI_HARNESS } from '../shared/defaults';
+
+/** Where a captured area's picture is put in a job folder. */
+export const AREA_PICTURE = 'area.png';
 
 export class JobRejected extends Error {
   constructor(message: string) {
@@ -23,6 +27,8 @@ export class JobRejected extends Error {
 interface PlanBase {
   skill: SkillInfo;
   skillHash: string;
+  /** A captured area's picture (see main/captures.ts). */
+  image?: string;
   explainLang: string;
   /** Context after the data scope was applied: this is what is sent. */
   context: TermContext;
@@ -80,7 +86,10 @@ export function planJob(opts: {
     explainLang,
     profile: settings.profile.trim(),
     theme: settings.theme,
+    image: req.image,
   };
+  /** What leaves the computer, shown on the card: a captured area's picture goes too. */
+  const withPicture = (r: string) => (req.image ? `${r} · picture` : r);
   const ctxId = (c: TermContext) => ({ term: c.term, sentence: c.sentence, paragraph: c.paragraph, heading: c.heading ?? '' });
 
   if (skill.runner === 'direct') {
@@ -94,13 +103,14 @@ export function planJob(opts: {
       runner: 'direct',
       skill,
       skillHash,
+      image: req.image,
       explainLang,
       context,
       engine,
       provider,
       docText,
       engineLabel: `Pi · ${provider.label} · ${engine.model} · ${engine.effort}`,
-      recipient: directRecipient(provider, engine.model, docText ? 'document' : scope === 'document' ? 'paragraph' : scope),
+      recipient: withPicture(directRecipient(provider, engine.model, docText ? 'document' : scope === 'document' ? 'paragraph' : scope)),
       cacheKey: cacheKey({
         ...identityBase,
         docTextHash: docText ? sha256(docText) : null,
@@ -124,28 +134,35 @@ export function planJob(opts: {
   }
 
   const engine = resolveAgent(settings, skill, req.agent);
-  const harness = settings.harnesses.find((h) => h.id === engine.harnessId);
+  // Built-in skills always run on the built-in Pi agent. An external CLI only runs skills the user added and chose it for.
+  const harness = skill.source === 'builtin' ? (settings.harnesses.find((h) => h.kind === 'pi') ?? PI_HARNESS) : settings.harnesses.find((h) => h.id === engine.harnessId);
   if (!harness) throw new JobRejected(`Harness "${engine.harnessId}" is not configured`);
   // Agents never receive the whole document, whatever the scope.
   const scope = settings.dataScope === 'document' ? 'paragraph' : settings.dataScope;
   const context = applyScope(req.context, scope);
-  const task = buildAgentTask({ skill, ctx: context, explainLang, theme: settings.theme, outputFile: OUTPUT_FILES[skill.output] });
+  const task = buildAgentTask({ skill, ctx: context, explainLang, theme: settings.theme, outputFile: OUTPUT_FILES[skill.output], picture: req.image ? AREA_PICTURE : undefined });
   if (harness.kind === 'pi') {
-    const provider = settings.providers.find((p) => p.id === (engine.providerId || settings.defaults.direct.providerId));
-    if (!provider) throw new JobRejected(`Provider "${engine.providerId || settings.defaults.direct.providerId}" is not configured`);
-    const model = engine.model || provider.selection?.model || settings.defaults.direct.model;
+    // The same connection, model and effort as every other skill: Models & effort → skill answers,
+    // this skill's own choice, or the card's options. Only time and budget limits come from the agent settings.
+    const chosen = selectedDirect(settings, skill.name, stripEmpty({ model: req.agent?.model, effort: req.agent?.effort }));
+    const providerId = settings.skillOverrides[skill.name]?.agent?.providerId || chosen.providerId;
+    const provider = settings.providers.find((p) => p.id === providerId);
+    if (!provider) throw new JobRejected(`Provider "${providerId}" is not configured`);
+    const model = provider.id === chosen.providerId ? chosen.model : (req.agent?.model || provider.selection?.model || chosen.model);
+    const effort = provider.id === chosen.providerId ? chosen.effort : (req.agent?.effort || provider.selection?.effort || 'default');
     return {
       runner: 'agent',
       skill,
       skillHash,
+      image: req.image,
       explainLang,
       context,
-      engine: { ...engine, providerId: provider.id, model },
+      engine: { ...engine, providerId: provider.id, model, effort },
       harness,
       provider,
       task,
-      engineLabel: `Pi · ${provider.label} · ${model} · ${engine.effort}`,
-      recipient: directRecipient(provider, model, scope),
+      engineLabel: `Pi · ${provider.label} · ${model} · ${effort}`,
+      recipient: withPicture(directRecipient(provider, model, scope)),
       cacheKey: cacheKey({
         ...identityBase,
         docTextHash: null,
@@ -158,7 +175,7 @@ export function planJob(opts: {
           kind: provider.kind,
           baseUrl: provider.baseUrl ?? '',
           model,
-          effort: engine.effort,
+          effort,
           budgetUsd: engine.budgetUsd,
           task: sha256(task),
         },
@@ -169,13 +186,14 @@ export function planJob(opts: {
     runner: 'agent',
     skill,
     skillHash,
+    image: req.image,
     explainLang,
     context,
     engine,
     harness,
     task,
     engineLabel: `${harness.label} · ${engine.model || 'default model'} · ${engine.effort}`,
-    recipient: agentRecipient(harness, engine.model, scope),
+    recipient: withPicture(agentRecipient(harness, engine.model, scope)),
     cacheKey: cacheKey({
       ...identityBase,
       docTextHash: null,

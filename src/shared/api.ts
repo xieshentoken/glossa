@@ -2,11 +2,12 @@
 
 import type { ParsedSkill } from './skills';
 import type { ConnectionsApi } from './connections';
-import type { DocInfo, DocRecord, JobRequest, JobState, Settings, SkillInfo, TermCard } from './types';
+import type { CardCapture, DocInfo, DocRecord, JobRequest, JobState, OutputKind, Settings, SkillInfo, TermCard } from './types';
 
 export type LoadedDoc =
   | { kind: 'pdf'; data: Uint8Array }
   | { kind: 'html'; html: string; text?: string }
+  | { kind: 'code'; text: string }
   | { kind: 'web'; url: string };
 
 export interface KeyStatus {
@@ -39,6 +40,8 @@ export interface GlossaApi {
     get(): Promise<Settings>;
     /** Widening data or agent permissions shows a confirmation in the main process; it rejects if declined. */
     set(patch: Partial<Settings>): Promise<Settings>;
+    /** Folder dialog for where results are saved (all skills, or one skill); null when cancelled. */
+    chooseOutputDir(skill?: string): Promise<Settings | null>;
   };
   agent: {
     isolation(): Promise<IsolationInfo>;
@@ -59,6 +62,12 @@ export interface GlossaApi {
     importFolder(): Promise<SkillInfo[] | null>;
     installKnown(name: string): Promise<SkillInfo[]>;
   };
+  capture: {
+    /** Takes a picture of this rectangle of the window (CSS pixels): the area the reader dragged over. */
+    area(rect: { x: number; y: number; width: number; height: number }): Promise<Omit<CardCapture, 'send'>>;
+    /** A stored picture as a data URL, for the card; undefined when it is gone. */
+    picture(id: string): Promise<string | undefined>;
+  };
   docs: {
     openFiles(): Promise<DocInfo[]>;
     openPath(file: string): Promise<DocInfo>;
@@ -75,6 +84,10 @@ export interface GlossaApi {
     start(req: JobRequest): Promise<JobState>;
     cancel(id: string): Promise<void>;
     get(id: string): Promise<JobState | undefined>;
+    /** A finished result as text, for the card's plain view (HTML results as their source). */
+    outputText(id: string): Promise<{ output: OutputKind; text: string } | undefined>;
+    /** Shows the saved copy of a result in the file manager; false when it is gone. */
+    showSaved(id: string): Promise<boolean>;
     onEvent(cb: (job: JobState) => void): () => void;
   };
   app: {
@@ -84,6 +97,8 @@ export interface GlossaApi {
     webviewPreload(): Promise<string>;
     openExternal(url: string): Promise<void>;
     onOpenInTab(cb: (url: string) => void): () => void;
+    /** Ctrl/Cmd + = − 0: zoom the active reading panel (not the whole window). */
+    onZoomKey(cb: (dir: 'in' | 'out' | 'reset') => void): () => void;
   };
 }
 
@@ -94,6 +109,7 @@ export const IPC = {
   connectionsRemove: 'connections:remove',
   settingsGet: 'settings:get',
   settingsSet: 'settings:set',
+  settingsChooseOutputDir: 'settings:chooseOutputDir',
   keysStatus: 'keys:status',
   keysSet: 'keys:set',
   keysTest: 'keys:test',
@@ -102,6 +118,8 @@ export const IPC = {
   agentForgetTrust: 'agent:forgetTrust',
   harnessProbe: 'agent:probe',
   docsClose: 'docs:close',
+  captureArea: 'capture:area',
+  capturePicture: 'capture:picture',
   skillsList: 'skills:list',
   skillsRead: 'skills:read',
   skillsSave: 'skills:save',
@@ -120,8 +138,11 @@ export const IPC = {
   jobsStart: 'jobs:start',
   jobsCancel: 'jobs:cancel',
   jobsGet: 'jobs:get',
+  jobsOutputText: 'jobs:outputText',
+  jobsShowSaved: 'jobs:showSaved',
   jobsEvent: 'jobs:event',
   appWebviewPreload: 'app:webviewPreload',
   appOpenExternal: 'app:openExternal',
   appOpenInTab: 'app:openInTab',
+  appZoomKey: 'app:zoomKey',
 } as const;

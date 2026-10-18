@@ -3,8 +3,12 @@ import { getDocument, GlobalWorkerOptions, TextLayer, type PDFDocumentProxy, typ
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { T } from '../../shared/i18n';
 import { cleanExtracted } from '../../shared/text';
+import { areaText } from '../../shared/area-text';
+import { bestMatch, findTerm, flashBoxes, flashRange, normalize, regionRect, scrollToBox, scrollToRange, toRegion } from '../../shared/term-locate';
 import type { DocInfo } from '../../shared/types';
 import { api } from '../api';
+import type { Locate, ReaderHandle } from '../lib/locate';
+import { clampZoom } from '../../shared/pinch';
 import { Icon } from './Icon';
 
 GlobalWorkerOptions.workerSrc = workerUrl;
@@ -13,11 +17,31 @@ const RENDER_CONCURRENCY = 2;
 /** Text extraction stops here; the main process trims to what it may send anyway. */
 const MAX_EXTRACT_CHARS = 1_000_000;
 
-export function PdfReader(props: { doc: DocInfo; t: T; onText: (text: string, title?: string) => void }) {
+/** 100% zoom shows pages at this PDF scale. */
+const BASE_SCALE = 1.25;
+
+/**
+ * `zoom` (pinch, Ctrl+wheel, the toolbar) applies at once as a CSS zoom of the
+ * rendered pages; shortly after it settles the pages are rendered again, sharp.
+ */
+export function PdfReader(props: {
+  doc: DocInfo;
+  t: T;
+  zoom: number;
+  onZoom: (z: number) => void;
+  onText: (text: string, title?: string) => void;
+  onHandle?: (h: ReaderHandle | null) => void;
+}) {
   const { doc, t } = props;
   const pagesRef = useRef<HTMLDivElement>(null);
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
-  const [scale, setScale] = useState(1.25);
+  const target = BASE_SCALE * props.zoom;
+  const [scale, setScale] = useState(target);
+  useEffect(() => {
+    if (target === scale) return;
+    const id = setTimeout(() => setScale(target), 180);
+    return () => clearTimeout(id);
+  }, [target, scale]);
   const [error, setError] = useState('');
   const onText = useRef(props.onText);
   onText.current = props.onText;
@@ -65,6 +89,9 @@ export function PdfReader(props: { doc: DocInfo; t: T; onText: (text: string, ti
   useEffect(() => {
     const host = pagesRef.current;
     if (!pdf || !host) return;
+    // Rendering again at a new scale keeps the reading position.
+    const scroller = host.parentElement;
+    const at = scroller && scroller.scrollHeight > 0 ? { top: scroller.scrollTop / scroller.scrollHeight, left: scroller.scrollLeft / Math.max(1, scroller.scrollWidth) } : null;
     host.replaceChildren();
     const dpr = window.devicePixelRatio || 1;
     // Pages are rendered when near the viewport, at most RENDER_CONCURRENCY at a time,
@@ -160,6 +187,10 @@ export function PdfReader(props: { doc: DocInfo; t: T; onText: (text: string, ti
         near.observe(div);
         far.observe(div);
       }
+      if (at && scroller && !disposed) {
+        scroller.scrollTop = at.top * scroller.scrollHeight;
+        scroller.scrollLeft = at.left * scroller.scrollWidth;
+      }
     })();
     return () => {
       disposed = true;
@@ -171,21 +202,103 @@ export function PdfReader(props: { doc: DocInfo; t: T; onText: (text: string, ti
     };
   }, [pdf, scale]);
 
+  // Pages are rendered only near the viewport: go to the term's page, wait for its text, then highlight.
+  const onHandle = props.onHandle;
+  useEffect(() => {
+    if (!onHandle || !pdf) return;
+    const texts = new Map<number, string>();
+    const pageText = async (n: number) => {
+      let s = texts.get(n);
+      if (s === undefined) {
+        const page = await pdf.getPage(n);
+        const tc = await page.getTextContent();
+        s = normalize(tc.items.map((it) => ('str' in it ? it.str : '')).join(''));
+        texts.set(n, s);
+      }
+      return s;
+    };
+    /** The page holding the term: the saved one when it still does, else the best match (nearest first on a tie). */
+    const findPage = async (loc: Parameters<Locate>[0]) => {
+      // A captured area without text: its page.
+      if (!loc.quote) return loc.page && loc.page <= pdf.numPages ? loc.page : undefined;
+      if (loc.page && loc.page <= pdf.numPages && bestMatch(await pageText(loc.page), loc)) return loc.page;
+      let best: { n: number; score: number } | null = null;
+      for (let n = 1; n <= pdf.numPages; n++) {
+        const m = bestMatch(await pageText(n), { ...loc, index: undefined });
+        const nearer = best && loc.page !== undefined && Math.abs(n - loc.page) < Math.abs(best.n - loc.page);
+        if (m && (!best || m.score > best.score || (m.score === best.score && nearer))) best = { n, score: m.score };
+      }
+      return best?.n;
+    };
+    const locate: Locate = async (loc, avoid) => {
+      const n = await findPage(loc);
+      const scroller = pagesRef.current?.parentElement;
+      if (!n || !scroller) return false;
+      const end = Date.now() + 6000;
+      let jumped = false;
+      while (Date.now() < end) {
+        const div = pagesRef.current?.querySelector<HTMLElement>(`.pdf-page[data-page="${n}"]`);
+        if (div && !jumped) {
+          scroller.scrollBy({ top: div.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8, behavior: 'instant' });
+          jumped = true;
+        }
+        if (div && !loc.quote && loc.region) {
+          // A picture without text: where it was on its page (pages keep their proportions at any zoom).
+          const box = () => regionRect(div, loc.region!);
+          scrollToBox(div, box, avoid);
+          flashBoxes(document, () => [box()], scroller);
+          return true;
+        }
+        const layer = div?.querySelector('.textLayer');
+        const range = layer && findTerm(layer, n === loc.page ? loc : { ...loc, index: undefined });
+        if (range) {
+          scrollToRange(range, avoid);
+          flashRange(range, scroller);
+          return true;
+        }
+        await new Promise((r) => setTimeout(r, 60));
+      }
+      return false;
+    };
+    onHandle({
+      locate,
+      // The text of every page under the area; its place is kept on the page under its middle.
+      area: async (rect) => {
+        const pages = pagesRef.current;
+        const mid = { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
+        const page = [...(pages?.querySelectorAll<HTMLElement>('.pdf-page') ?? [])].find((p) => {
+          const b = p.getBoundingClientRect();
+          return mid.x >= b.left && mid.x <= b.right && mid.y >= b.top && mid.y <= b.bottom;
+        });
+        const all = pages ? areaText(pages, rect) : { text: '', pictures: true };
+        const layer = page?.querySelector('.textLayer');
+        const first = layer ? areaText(layer, rect).locator : undefined;
+        const n = Number(page?.dataset.page) || undefined;
+        return {
+          text: all.text,
+          pictures: true,
+          locator: { ...(first ?? { quote: '', prefix: '', suffix: '' }), ...(n ? { page: n } : {}), ...(page ? { region: toRegion(page, rect) } : {}) },
+        };
+      },
+    });
+    return () => onHandle(null);
+  }, [pdf, onHandle]);
+
   if (error) return <div className="doc-message">{t('loadFailed')}: {error}</div>;
   return (
     <div className="pdf-reader">
       <div className="doc-toolbar">
-        <button className="icon" title={t('pdfZoomOut')} aria-label={t('pdfZoomOut')} onClick={() => setScale((s) => Math.max(0.5, +(s - 0.15).toFixed(2)))}>
+        <button className="icon" title={t('pdfZoomOut')} aria-label={t('pdfZoomOut')} onClick={() => props.onZoom(clampZoom(props.zoom / 1.15))}>
           <Icon name="minimize" />
         </button>
-        <span className="zoom">{Math.round(scale * 100)}%</span>
-        <button className="icon" title={t('pdfZoomIn')} aria-label={t('pdfZoomIn')} onClick={() => setScale((s) => Math.min(4, +(s + 0.15).toFixed(2)))}>
+        <span className="zoom">{Math.round(props.zoom * 100)}%</span>
+        <button className="icon" title={t('pdfZoomIn')} aria-label={t('pdfZoomIn')} onClick={() => props.onZoom(clampZoom(props.zoom * 1.15))}>
           <Icon name="plus" />
         </button>
         {pdf ? <span className="muted">{pdf.numPages} p.</span> : <span className="muted">{t('loading')}</span>}
       </div>
       <div className="doc-scroll doc-surface">
-        <div className="pdf-pages" ref={pagesRef} />
+        <div className="pdf-pages" ref={pagesRef} style={{ zoom: target / scale }} />
       </div>
     </div>
   );

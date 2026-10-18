@@ -9,6 +9,16 @@ import { marked } from 'marked';
 import type { LoadedDoc } from '../shared/api';
 import type { DocInfo, DocKind } from '../shared/types';
 
+/** Source code and data files, shown as numbered lines. */
+export const CODE_EXTS = [
+  'py', 'pyi', 'ipynb', 'js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'vue', 'svelte',
+  'json', 'jsonc', 'json5', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'env', 'properties', 'xml', 'xsd',
+  'css', 'scss', 'sass', 'less', 'sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd',
+  'c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'hh', 'cs', 'java', 'kt', 'kts', 'scala', 'groovy', 'gradle', 'go', 'rs', 'swift', 'm', 'mm',
+  'rb', 'php', 'pl', 'pm', 'lua', 'r', 'jl', 'dart', 'ex', 'exs', 'erl', 'hs', 'clj', 'cljs', 'elm', 'fs', 'fsx', 'ml', 'nim', 'zig', 'v',
+  'sql', 'graphql', 'gql', 'proto', 'tf', 'hcl', 'cmake', 'mk', 'dockerfile', 'tex', 'bib', 'rst', 'csv', 'tsv', 'log', 'diff', 'patch',
+];
+
 export const FILE_KINDS: Record<string, DocKind> = {
   '.pdf': 'pdf',
   '.docx': 'docx',
@@ -17,7 +27,32 @@ export const FILE_KINDS: Record<string, DocKind> = {
   '.txt': 'text',
   '.html': 'html',
   '.htm': 'html',
+  ...Object.fromEntries(CODE_EXTS.map((e) => [`.${e}`, 'code' as const])),
 };
+
+/** Code files known by name rather than extension. */
+const CODE_NAMES = new Set(['dockerfile', 'containerfile', 'makefile', 'gnumakefile', 'cmakelists.txt', 'gemfile', 'rakefile', 'procfile', 'vagrantfile', 'jenkinsfile', '.gitignore', '.gitattributes', '.dockerignore', '.editorconfig', '.env', '.npmrc', '.bashrc', '.zshrc', '.profile']);
+
+export function fileKind(file: string): DocKind | undefined {
+  const name = path.basename(file).toLowerCase();
+  return CODE_NAMES.has(name) ? 'code' : FILE_KINDS[path.extname(name)];
+}
+
+/** Code is shown line by line in the page; larger files would make the reader unusable. */
+export const MAX_CODE_BYTES = 8 * 1024 * 1024;
+
+/** Minified JSON (very long lines) is shown indented; anything else exactly as written. */
+export function codeText(file: string, raw: string): string {
+  const ext = path.extname(file).toLowerCase();
+  if ((ext === '.json' || ext === '.ipynb') && raw.length > 2000 && raw.split('\n').length < raw.length / 400) {
+    try {
+      return JSON.stringify(JSON.parse(raw), null, 2);
+    } catch {
+      // not valid JSON: shown as it is
+    }
+  }
+  return raw;
+}
 
 export function sha256(data: string | Buffer): string {
   return crypto.createHash('sha256').update(data).digest('hex');
@@ -47,7 +82,7 @@ export class DocumentService {
   private texts = new Map<string, string>();
 
   async describeFile(file: string): Promise<DocInfo> {
-    const kind = FILE_KINDS[path.extname(file).toLowerCase()];
+    const kind = fileKind(file);
     if (!kind) throw new Error(`Unsupported file type: ${path.extname(file) || file}`);
     const st = await fs.promises.stat(file);
     if (!st.isFile()) throw new Error('Not a file');
@@ -104,6 +139,11 @@ export class DocumentService {
       }
       case 'html':
         return { kind: 'html', html: await fs.promises.readFile(info.source, 'utf8') };
+      case 'code': {
+        const st = await fs.promises.stat(info.source);
+        if (st.size > MAX_CODE_BYTES) throw new Error(`This file is too large to show as code (${Math.round(st.size / 1048576)} MB, at most ${MAX_CODE_BYTES / 1048576} MB).`);
+        return { kind: 'code', text: codeText(info.source, (await fs.promises.readFile(info.source, 'utf8')).replace(/^\uFEFF/, '')) };
+      }
       case 'text': {
         const txt = await fs.promises.readFile(info.source, 'utf8');
         const html = txt

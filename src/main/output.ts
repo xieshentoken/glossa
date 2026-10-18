@@ -3,6 +3,7 @@
 import path from 'node:path';
 import { marked } from 'marked';
 import { escapeHtml } from './documents';
+import { htmlAnswer, htmlAnswerParts } from '../shared/html-answer';
 
 /** Scripts allowed (inline only) for HTML skills; no network of any kind. */
 export const HTML_OUTPUT_CSP =
@@ -18,7 +19,10 @@ const FONT_STACK =
   "system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif";
 
 export async function markdownPage(md: string, opts: { theme: 'dark' | 'light'; lang: string; title: string }): Promise<string> {
-  const body = await marked.parse(md);
+  // An answer written as HTML is shown rendered (its own styles kept, scripts dropped; the CSP allows none).
+  const html = htmlAnswer(md);
+  const parts = html ? htmlAnswerParts(html) : null;
+  const body = parts ? parts.body : await marked.parse(md);
   const dark = opts.theme === 'dark';
   return `<!doctype html>
 <html lang="${escapeHtml(opts.lang)}"><head><meta charset="utf-8">
@@ -39,6 +43,7 @@ blockquote { margin: .7em 0; padding-inline-start: .9em; border-inline-start: 3p
 a { color: ${dark ? '#8ab4ff' : '#0b57d0'} }
 table { border-collapse: collapse } td,th { border: 1px solid ${dark ? '#2b2f37' : '#e2e4e9'}; padding: .3em .6em }
 ::selection { background: rgba(245, 180, 0, ${dark ? '.16' : '.18'}) }
+${parts?.styles.replace(/<\/style/gi, '') ?? ''}
 </style></head><body>${body}</body></html>`;
 }
 

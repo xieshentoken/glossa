@@ -17,13 +17,15 @@ import path from 'node:path';
 import { PI_HARNESS } from '../shared/defaults';
 import { buildDirectPrompt } from '../shared/prompts';
 import { modelInfo } from '../shared/model-catalog';
+import { skillLabel } from '../shared/skills';
 import type { JobRequest, JobState, ProviderConfig, SkillInfo, Theme } from '../shared/types';
 import { authorizeAgentRun, denyAll, PI_TOOLS, type AgentApprover } from './agent-policy';
 import { redactor, secretValues } from './agent-env';
 import { ResultCache } from './cache';
 import { detectIsolation, type IsolationStatus } from './isolation';
-import { JobRejected, planJob, type JobPlan } from './job-plan';
+import { AREA_PICTURE, JobRejected, planJob, type JobPlan } from './job-plan';
 import { OUTPUT_FILES, OUTPUT_SPECS, readOutputText, validateOutput, writeOutput } from './output-contract';
+import { exportResult, outputDirFor } from './output-export';
 import { piModelSpec } from './pi-model';
 import { isAbort } from './providers';
 import { collectOutput, harnessArgv, prepareWorkspace, runAgent, type AgentRunOptions, type AgentRunResult } from './runners/agent';
@@ -71,6 +73,7 @@ export class JobManager {
   private agentQueue: (() => void)[] = [];
   private agentsRunning = 0;
   private closing = false;
+  private autoNoticeDeclined = false;
   readonly cache: ResultCache;
 
   constructor(private deps: JobDeps) {
@@ -99,6 +102,14 @@ export class JobManager {
     const job = this.get(id);
     const root = this.outputDir(id);
     return job && root ? path.join(root, OUTPUT_SPECS[job.output].file) : undefined;
+  }
+
+  /** A finished result as text (at most 2 MB), for the plain view. */
+  outputText(id: string): { output: JobState['output']; text: string } | undefined {
+    const job = this.get(id);
+    const file = this.outputFile(id);
+    if (!job || !file) return undefined;
+    return { output: job.output, text: fs.readFileSync(file).subarray(0, 2_000_000).toString('utf8') };
   }
 
   private load(id: string): JobRecord | undefined {
@@ -168,6 +179,7 @@ export class JobManager {
   async start(req: JobRequest): Promise<JobState> {
     const settings = this.settings();
     const plan = planJob({ req, settings: { ...settings, theme: this.theme() }, skills: this.deps.skills(), skillHash: this.deps.skillHash, docText: this.deps.docText });
+    if (plan.image && !this.deps.store.captures.has(plan.image)) throw new JobRejected('The picture of this area is gone. Capture the area again.');
 
     if (!req.force) {
       const hit = this.cacheHit(plan, req);
@@ -253,9 +265,22 @@ export class JobManager {
       costUsd: undefined,
       layout: LAYOUT,
     };
+    Object.assign(job, this.saveCopy(plan, this.outputRoot(owner), owner.output));
     this.jobs.set(job.id, job);
     this.persist(job);
     return this.get(job.id);
+  }
+
+  /** A copy of a finished result in the output folder chosen for its skill, if any. Never fails the job. */
+  private saveCopy(plan: JobPlan, outputRoot: string, output: JobState['output']): Pick<JobRecord, 'savedTo' | 'saveError'> {
+    const settings = this.settings();
+    const dir = outputDirFor(settings, plan.skill.name);
+    if (!dir) return {};
+    try {
+      return { savedTo: exportResult({ dir, outputRoot, output, docTitle: plan.context.docTitle || 'Glossa', term: plan.context.term, skill: skillLabel(plan.skill, settings.uiLang) }) };
+    } catch (err) {
+      return { saveError: `Not saved to the output folder: ${(err as Error).message}` };
+    }
   }
 
   private finish(id: string, plan: JobPlan, outcome: RunOutcome): void {
@@ -267,6 +292,7 @@ export class JobManager {
       return;
     }
     const complete = !outcome.partial;
+    const saved = this.saveCopy(plan, this.outputRoot(job), output);
     this.update(
       id,
       {
@@ -276,12 +302,19 @@ export class JobManager {
         error: outcome.note,
         costUsd: outcome.costUsd,
         finishedAt: Date.now(),
+        ...saved,
         ...(output === 'markdown' ? { text: readOutputText(this.outputRoot(job), 'markdown') } : {}),
       },
       true,
     );
     // Only complete answers produced for exactly these inputs are reused.
     if (complete && output === plan.skill.output) this.cache.set(plan.cacheKey, id);
+  }
+
+  /** The saved copy of a result, when it is still there. */
+  savedCopy(id: string): string | undefined {
+    const p = this.load(id)?.savedTo;
+    return p && fs.existsSync(p) ? p : undefined;
   }
 
   cancel(id: string): void {
@@ -322,11 +355,21 @@ export class JobManager {
     return key;
   }
 
+  private pictureFile(plan: JobPlan): { name: string; data: Buffer } | undefined {
+    return plan.image ? { name: AREA_PICTURE, data: this.deps.store.captures.read(plan.image) } : undefined;
+  }
+
+  /** A captured area's picture for Pi. Optional when the area had text: a model that cannot read pictures gets the text alone. */
+  private pictureFor(plan: JobPlan): Pick<PiTask, 'images' | 'imagesOptional'> {
+    const p = this.pictureFile(plan);
+    return p ? { images: [{ data: p.data.toString('base64'), mimeType: 'image/png' }], imagesOptional: !!plan.context.sentence.trim() } : {};
+  }
+
   /** Short answer: Pi gets the passage and the skill in one prompt; its final message is the result. */
   private async runAnswer(id: string, plan: Extract<JobPlan, { runner: 'direct' }>, signal: AbortSignal): Promise<RunOutcome> {
     const settings = this.settings();
     this.update(id, { status: 'running', startedAt: Date.now(), progress: '' });
-    const prompt = buildDirectPrompt({ skill: plan.skill, ctx: plan.context, explainLang: plan.explainLang, profile: settings.profile, docText: plan.docText });
+    const prompt = buildDirectPrompt({ skill: plan.skill, ctx: plan.context, explainLang: plan.explainLang, profile: settings.profile, docText: plan.docText, picture: !!plan.image });
     const workspace = path.join(this.jobDir(id), 'work');
     let lastEmit = 0;
     const r = await this.pi(
@@ -340,6 +383,7 @@ export class JobManager {
         model: piModelSpec(plan.provider, plan.engine.model, plan.engine.effort, plan.engine.maxTokens),
         apiKey: this.key(plan.provider),
         budgetUsd: 0,
+        ...this.pictureFor(plan),
         demo: { skill: plan.skill.name, term: plan.context.term, lang: plan.explainLang, model: plan.engine.model, effort: plan.engine.effort, output: 'markdown', delayMs: demoDelay() },
       },
       ANSWER_TIMEOUT_MIN,
@@ -375,7 +419,7 @@ export class JobManager {
     const settings = this.settings();
     const provider = plan.provider!;
     const workspace = path.join(this.jobDir(id), 'work');
-    prepareWorkspace({ workspace, skill: plan.skill, harness: plan.harness, ctx: plan.context, explainLang: plan.explainLang, profile: settings.profile });
+    prepareWorkspace({ workspace, skill: plan.skill, harness: plan.harness, ctx: plan.context, explainLang: plan.explainLang, profile: settings.profile, picture: this.pictureFile(plan) });
     fs.writeFileSync(path.join(workspace, 'task.md'), plan.task);
     const r = await this.pi(
       {
@@ -389,6 +433,7 @@ export class JobManager {
         model: piModelSpec(provider, plan.engine.model, plan.engine.effort, modelInfo(provider, plan.engine.model).maxOutputTokens ?? 32_000),
         apiKey: this.key(provider),
         budgetUsd: plan.engine.budgetUsd,
+        ...this.pictureFor(plan),
         demo: { skill: plan.skill.name, term: plan.context.term, lang: plan.explainLang, model: plan.engine.model, effort: plan.engine.effort, output: plan.skill.output, delayMs: demoDelay() },
       },
       plan.engine.timeoutMinutes,
@@ -425,7 +470,12 @@ export class JobManager {
       isolation: this.isolation(),
       approve: this.deps.approveAgent ?? denyAll,
       enableAgents: async () => {
-        if (!(await (this.deps.confirmAgents ?? (async () => false))())) return false;
+        // A declined notice is not shown again by the next automatic start, only by a click.
+        if (req.origin !== 'user' && this.autoNoticeDeclined) return false;
+        if (!(await (this.deps.confirmAgents ?? (async () => false))())) {
+          if (req.origin !== 'user') this.autoNoticeDeclined = true;
+          return false;
+        }
         this.deps.store.setSettings({ agentsEnabled: true });
         return true;
       },
@@ -476,6 +526,7 @@ export class JobManager {
       ctx: plan.context,
       explainLang: plan.explainLang,
       profile: settings.profile,
+      picture: this.pictureFile(plan),
       apiKey: plan.harness.keyFromProvider ? this.deps.store.getKey(plan.harness.keyFromProvider) : undefined,
       signal,
       onProgress: (line) => this.update(id, { progress: line }),

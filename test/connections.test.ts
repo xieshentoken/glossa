@@ -20,7 +20,7 @@ describe('connection contracts and migration', () => {
   it('preserves v2 privacy grants, custom endpoints and references', () => {
     const s = mergeSettings({ settingsVersion: 2, dataScope: 'document', agentsEnabled: true, agentTrust: { x: 'hash' }, providers: [{ id: 'openai', kind: 'openai', label: 'Work', baseUrl: 'https://relay.example/v1' }] });
     // v4 clears remembered approvals: they named a harness command (see toV4).
-    expect(s).toMatchObject({ settingsVersion: 4, dataScope: 'document', agentsEnabled: true, agentTrust: {} });
+    expect(s).toMatchObject({ settingsVersion: 5, dataScope: 'document', agentsEnabled: true, agentTrust: {} });
     expect(s.providers.find((p) => p.id === 'openai')).toMatchObject({ label: 'Work', baseUrl: 'https://relay.example/v1', presetId: 'custom' });
     expect(inferPreset({ id: 'a', kind: 'anthropic', label: 'A' })).toBe('anthropic');
   });

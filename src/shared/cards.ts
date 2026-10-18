@@ -36,10 +36,15 @@ export function cardJobIds(rec: Pick<DocRecord, 'cards' | 'termCards'> | undefin
   return [...(rec.termCards ?? []).flatMap((c) => c.tasks.map((t) => t.jobId)), ...(rec.cards ?? []).map((c) => c.jobId)];
 }
 
+/** Pictures of captured areas a document's cards still use. */
+export function cardPictureIds(rec: Pick<DocRecord, 'termCards'> | undefined): string[] {
+  return (rec?.termCards ?? []).flatMap((c) => [c.capture?.id, ...c.tasks.map((t) => t.request.image)]).filter((x): x is string => !!x);
+}
+
 /** Runs with the same key show the same answer: clicking again goes to the existing task. */
 export function runKey(req: JobRequest): string {
   const engine = req.agent ?? req.direct;
-  return JSON.stringify([req.skill, req.context.term, req.explainLang, engine?.model ?? '', engine?.effort ?? '']);
+  return JSON.stringify([req.skill, req.context.term, req.explainLang, engine?.model ?? '', engine?.effort ?? '', ...(req.image ? [req.image] : [])]);
 }
 
 /** Grow a card so a result fits, without shrinking what the user chose. */

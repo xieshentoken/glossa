@@ -1,5 +1,6 @@
 // The single gate every run passes, whatever started it (a card's skill button,
-// re-run, a direct IPC call). Every skill runs with an agent. Three different things:
+// re-run, a direct IPC call, the automatic quick explanation of a new card).
+// Every skill runs with an agent. Three different things:
 //   - agentsEnabled: the user accepted the notice that skills run with an agent
 //     (asked once, on the first run, by a dialog of the main process);
 //   - approval: built-in skills on the built-in Pi agent need none; other skills
@@ -73,7 +74,9 @@ export async function authorizeAgentRun(o: {
   enableAgents?: () => Promise<boolean>;
   remember: (skill: string, token: string) => void;
 }): Promise<void> {
-  if (o.origin !== 'user') throw new JobRejected('Agent skills only start from an explicit click, never automatically.');
+  // The one automatic start: the quick explanation of a newly picked term (a short answer, no job folder).
+  const autoQuick = o.origin === 'auto' && o.settings.autoQuick && o.skill.name === o.settings.quickSkill && o.skill.runner === 'direct';
+  if (o.origin !== 'user' && !autoQuick) throw new JobRejected('Agent skills only start from an explicit click, never automatically.');
   if (!o.settings.agentsEnabled && !(await o.enableAgents?.())) {
     throw new JobRejected('Skills run with an agent, and agents are turned off. Turn them on in Settings → Agent harnesses after reading the notice.');
   }
@@ -86,6 +89,8 @@ export async function authorizeAgentRun(o: {
   if (pi && o.skill.source === 'builtin') return;
   const token = trustToken(o.skillHash, o.harness);
   if (o.settings.agentTrust[o.skill.name] === token) return;
+  // An approval dialog only ever follows a click.
+  if (o.origin !== 'user') throw new JobRejected(`"${o.skill.name}" needs your approval first: click it on the card.`);
   const d = await o.approve({
     ...o.request,
     skill: o.skill.name,

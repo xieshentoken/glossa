@@ -7,6 +7,7 @@
 
 import { matchHotkey, parseHotkey, type Hotkey } from './hotkey';
 import { cleanTerm, growEnd, growStart, sentenceAt, shrinkEnd, shrinkStart, windowAround, wordAt, type Span } from './segment';
+import { makeLocator } from './term-locate';
 import { guessLang, truncate } from './text';
 import type { PickedTerm } from './types';
 
@@ -16,8 +17,10 @@ export interface CaptureOptions {
   docMeta: () => { title: string; source: string; lang?: string };
   onConfirm: (picked: PickedTerm) => void;
   hint?: string;
-  /** Limit picking to this element (default: whole document). */
+  /** Limit picking to this element (default: whole document). Returning null means there is nothing to pick here. */
   root?: () => Element | null;
+  /** The hotkey found nothing to pick (e.g. the mouse is over a web page shown inside this one). */
+  onMiss?: () => void;
 }
 
 interface TextMap {
@@ -185,8 +188,9 @@ export function createTermCapture(o: CaptureOptions) {
   };
 
   const inRoot = (n: Node) => {
-    const root = o.root?.();
-    return !root || root.contains(n);
+    if (!o.root) return true;
+    const root = o.root();
+    return !!root && root.contains(n);
   };
 
   const begin = (map: TextMap, span: Span) => {
@@ -207,6 +211,9 @@ export function createTermCapture(o: CaptureOptions) {
       !map.layer && map.text.length <= 1600 ? map.text.replace(/\s+/g, ' ').trim() : windowAround(map.text.replace(/\n/g, ' '), span, 700);
     const box = r.getBoundingClientRect();
     const meta = o.docMeta();
+    // A PDF term is found again in its page's text; anything else in the reader's (or page's) whole text.
+    const page = map.layer ? Number(map.block.closest<HTMLElement>('.pdf-page')?.dataset.page) || undefined : undefined;
+    const root = map.layer ? map.block : (o.root?.() ?? doc.body);
     o.onConfirm({
       context: {
         term,
@@ -219,6 +226,7 @@ export function createTermCapture(o: CaptureOptions) {
         termLang: lang,
       },
       rect: { x: box.left, y: box.top, width: box.width, height: box.height },
+      locator: root ? makeLocator({ text: map.text, start: span.start, end: span.end, root, node: r.startContainer, offset: r.startOffset, page }) : undefined,
     });
   };
 
@@ -240,18 +248,22 @@ export function createTermCapture(o: CaptureOptions) {
     return true;
   };
 
-  const startAtPointer = () => {
+  const startAtPointer = (): boolean => {
     const c = caretAt(doc, mouse.x, mouse.y);
-    if (!c || c.node.nodeType !== Node.TEXT_NODE || !inRoot(c.node)) return;
+    if (!c || c.node.nodeType !== Node.TEXT_NODE || !inRoot(c.node)) return false;
     const fb = findBlock(c.node);
-    if (!fb) return;
+    if (!fb) return false;
     const map = buildMap(fb.block, fb.layer);
     const off = offsetOf(map, c.node, c.offset);
-    if (off === null) return;
+    if (off === null) return false;
     const lang = langFor(fb.block, map.text);
     const span = wordAt(map.text, off, lang);
     if (span) begin(map, span);
+    return !!span;
   };
+
+  /** What the hotkey does: the selection at once, else the word under the mouse. False when there was nothing. */
+  const trigger = (): boolean => startFromSelection() || startAtPointer();
 
   const onKey = (e: KeyboardEvent) => {
     if (active) {
@@ -273,7 +285,7 @@ export function createTermCapture(o: CaptureOptions) {
     if (!matchHotkey(e, hk) || isEditable(e.target)) return;
     e.preventDefault();
     e.stopPropagation();
-    if (!startFromSelection()) startAtPointer();
+    if (!trigger()) o.onMiss?.();
   };
 
   const onMove = (e: MouseEvent) => {
@@ -307,6 +319,8 @@ export function createTermCapture(o: CaptureOptions) {
       o.hint = s;
     },
     isActive: () => !!active,
+    /** As if the hotkey were pressed here (the host forwards it when the page did not have the keyboard). */
+    trigger,
     cancel,
     /** For tests and automation: pick the word at a point as if the hotkey were pressed. */
     pickAt(x: number, y: number) {

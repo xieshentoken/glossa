@@ -14,6 +14,7 @@ const api: GlossaApi = {
   settings: {
     get: () => invoke(IPC.settingsGet),
     set: (patch) => invoke(IPC.settingsSet, patch),
+    chooseOutputDir: (skill) => invoke(IPC.settingsChooseOutputDir, skill),
   },
   agent: {
     isolation: () => invoke(IPC.agentIsolation),
@@ -34,6 +35,10 @@ const api: GlossaApi = {
     importFolder: () => invoke(IPC.skillsImport),
     installKnown: (name) => invoke(IPC.skillsInstall, name),
   },
+  capture: {
+    area: (rect) => invoke(IPC.captureArea, rect),
+    picture: (id) => invoke(IPC.capturePicture, id),
+  },
   docs: {
     openFiles: () => invoke(IPC.docsOpenFiles),
     openPath: (file) => invoke(IPC.docsOpenPath, file),
@@ -50,6 +55,8 @@ const api: GlossaApi = {
     start: (req) => invoke(IPC.jobsStart, req),
     cancel: (id) => invoke(IPC.jobsCancel, id),
     get: (id) => invoke(IPC.jobsGet, id),
+    outputText: (id) => invoke(IPC.jobsOutputText, id),
+    showSaved: (id) => invoke(IPC.jobsShowSaved, id),
     onEvent: (cb) => {
       const l = (_e: unknown, job: JobState) => cb(job);
       ipcRenderer.on(IPC.jobsEvent, l);
@@ -65,6 +72,11 @@ const api: GlossaApi = {
       const l = (_e: unknown, url: string) => cb(url);
       ipcRenderer.on(IPC.appOpenInTab, l);
       return () => ipcRenderer.removeListener(IPC.appOpenInTab, l);
+    },
+    onZoomKey: (cb) => {
+      const l = (_e: unknown, dir: 'in' | 'out' | 'reset') => cb(dir);
+      ipcRenderer.on(IPC.appZoomKey, l);
+      return () => ipcRenderer.removeListener(IPC.appZoomKey, l);
     },
   },
 };

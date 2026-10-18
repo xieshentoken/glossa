@@ -53,6 +53,10 @@ export interface PiTask {
   model: PiModelSpec;
   apiKey?: string;
   budgetUsd: number;
+  /** Pictures attached to the prompt (a captured area), base64. */
+  images?: { data: string; mimeType: string }[];
+  /** The prompt also stands without them: a model Pi knows cannot read pictures gets the text alone. */
+  imagesOptional?: boolean;
   /** What the demo model echoes back; delayMs slows it down (tests of the queue). */
   demo?: { skill: string; term: string; lang: string; model: string; effort: string; output: 'markdown' | 'html'; delayMs?: number };
 }
@@ -89,7 +93,8 @@ function parentPort(): Port {
 function demoModel(task: PiTask): { runtimeProvider: ReturnType<typeof fauxProvider>; model: Model<string> } {
   const faux = fauxProvider({ provider: PROVIDER, models: [{ id: task.model.id }], tokensPerSecond: 400 });
   const d = task.demo ?? { skill: 'skill', term: '?', lang: '?', model: task.model.id, effort: 'default', output: 'markdown' as const };
-  const line = `**${d.term}** — offline sample explanation (${d.skill}, ${d.lang}, ${d.model}, effort ${d.effort}).`;
+  const pictures = task.images?.length ? `, with ${task.images.length} picture${task.images.length > 1 ? 's' : ''}` : '';
+  const line = `**${d.term}** — offline sample explanation (${d.skill}, ${d.lang}, ${d.model}, effort ${d.effort}${pictures}).`;
   const slow = (msg: AssistantMessage) => async (_c: unknown, options?: { signal?: AbortSignal }) => {
     if (d.delayMs) {
       await new Promise<void>((resolve) => {
@@ -111,6 +116,11 @@ function demoModel(task: PiTask): { runtimeProvider: ReturnType<typeof fauxProvi
   return { runtimeProvider: faux, model: faux.getModel() };
 }
 
+/** Whether the model can read the task's pictures; unknown models (custom endpoints) are asked anyway. */
+function seesPictures(known: Model<string> | undefined): boolean {
+  return !known || known.input.includes('image');
+}
+
 async function resolveModel(task: PiTask, runtime: ModelRuntime): Promise<Model<string>> {
   if (task.model.demo) {
     const { runtimeProvider, model } = demoModel(task);
@@ -119,6 +129,10 @@ async function resolveModel(task: PiTask, runtime: ModelRuntime): Promise<Model<
   }
   const m = task.model;
   const known = m.catalog ? runtime.getModel(m.catalog.provider, m.catalog.id) : undefined;
+  if (task.images?.length && !seesPictures(known)) {
+    if (!task.imagesOptional) throw new Error(`${m.id} cannot read pictures, and this area has no text. Choose a model that can see images for this skill (Settings → Models & effort).`);
+    task.images = undefined;
+  }
   runtime.registerProvider(PROVIDER, {
     name: 'Glossa connection',
     baseUrl: m.baseUrl,
@@ -129,7 +143,7 @@ async function resolveModel(task: PiTask, runtime: ModelRuntime): Promise<Model<
         name: m.id,
         api: m.api,
         baseUrl: m.baseUrl,
-        input: ['text'],
+        input: task.images?.length ? ['text', 'image'] : ['text'],
         reasoning: m.reasoning,
         ...(m.thinkingLevelMap ? { thinkingLevelMap: m.thinkingLevelMap } : {}),
         ...(m.compat ? { compat: m.compat as never } : {}),
@@ -151,7 +165,9 @@ function textOf(msg: AssistantMessage): string {
 
 async function run(task: PiTask, port: Port, abort: { current?: () => void }): Promise<PiRunResult> {
   const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
+  const hadPictures = !!task.images?.length;
   const model = await resolveModel(task, runtime);
+  if (hadPictures && !task.images) port.send({ type: 'progress', line: `${model.id} cannot read pictures: only the area's text was sent` });
   const skills = task.skillsDir ? loadSkillsFromDir({ dir: task.skillsDir, source: 'glossa' }) : { skills: [], diagnostics: [] };
   const resourceLoader: ResourceLoader = {
     getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
@@ -197,7 +213,7 @@ async function run(task: PiTask, port: Port, abort: { current?: () => void }): P
     }
   });
   try {
-    await session.prompt(task.prompt);
+    await session.prompt(task.prompt, task.images?.length ? { images: task.images.map((i) => ({ type: 'image' as const, ...i })) } : undefined);
   } finally {
     session.dispose();
   }

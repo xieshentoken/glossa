@@ -16,7 +16,7 @@ const working: KeyBackend = {
   decrypt: (s) => Buffer.from(s.split('').reverse().join(''), 'base64').toString(),
 };
 const unavailable: KeyBackend = { ...working, protection: () => ({ ok: false, reason: 'no keychain' }) };
-const KEY = 'sk-synthetic-0123456789';
+const KEY = 'sk-synthetic-test-only-00000000000000000000';
 const onDisk = (f: string) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '');
 
 describe('KeyStore', () => {

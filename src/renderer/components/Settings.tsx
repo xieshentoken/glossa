@@ -109,8 +109,52 @@ function Field(props: { value: string; onCommit: (v: string) => void; placeholde
   );
 }
 
-function General({ settings, t, onChange }: PaneProps) {
+/** Shows a key combination; "Change" records the next one pressed (Esc keeps the old one). */
+function HotkeyField(props: { t: T; value: string; onChange: (hk: string) => void; testId?: string }) {
+  const { t } = props;
   const [recording, setRecording] = useState(false);
+  return (
+    <div className="row">
+      <kbd className="big">{recording ? t('pressKeys') : props.value}</kbd>
+      <button
+        data-testid={props.testId}
+        onClick={() => setRecording(true)}
+        onKeyDown={(e) => {
+          if (!recording) return;
+          e.preventDefault();
+          if (e.key === 'Escape') return setRecording(false);
+          const hk = hotkeyFromEvent(e.nativeEvent);
+          if (hk) {
+            setRecording(false);
+            props.onChange(hk);
+          }
+        }}
+        onBlur={() => setRecording(false)}
+      >
+        {t('change')}
+      </button>
+    </div>
+  );
+}
+
+/** Where results are saved: a folder chosen in the system dialog, or none. */
+function OutputDirField(props: { t: T; value: string; onSaved: (s: SettingsT) => void; onClear: () => void }) {
+  const { t } = props;
+  return (
+    <div className="row output-dir">
+      <span className={`path ${props.value ? '' : 'muted'}`} title={props.value} data-testid="output-dir">
+        {props.value || t('outputDirNone')}
+      </span>
+      <button onClick={() => void api.settings.chooseOutputDir().then((s) => s && props.onSaved(s))}>
+        <Icon name="folder" size={15} />
+        {t('choose')}
+      </button>
+      {props.value && <button onClick={props.onClear}>{t('outputDirClear')}</button>}
+    </div>
+  );
+}
+
+function General({ settings, t, onChange, onSaved }: PaneProps) {
   return (
     <div className="form two-col">
       <label>
@@ -143,26 +187,28 @@ function General({ settings, t, onChange }: PaneProps) {
       </label>
       <label>
         {t('hotkey')}
-        <div className="row">
-          <kbd className="big">{recording ? t('pressKeys') : settings.hotkey}</kbd>
-          <button
-            onClick={() => setRecording(true)}
-            onKeyDown={(e) => {
-              if (!recording) return;
-              e.preventDefault();
-              if (e.key === 'Escape') return setRecording(false);
-              const hk = hotkeyFromEvent(e.nativeEvent);
-              if (hk) {
-                setRecording(false);
-                void onChange({ hotkey: hk });
-              }
-            }}
-            onBlur={() => setRecording(false)}
-          >
-            {t('change')}
-          </button>
-        </div>
+        <HotkeyField t={t} value={settings.hotkey} onChange={(hk) => void onChange({ hotkey: hk })} />
       </label>
+      <label>
+        {t('locateHotkey')}
+        <HotkeyField t={t} value={settings.locateHotkey} onChange={(hk) => void onChange({ locateHotkey: hk })} testId="locate-hotkey" />
+      </label>
+      <label>
+        {t('captureHotkey')}
+        <HotkeyField t={t} value={settings.captureHotkey} onChange={(hk) => void onChange({ captureHotkey: hk })} testId="capture-hotkey" />
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={settings.autoQuick} onChange={(e) => onChange({ autoQuick: e.target.checked })} data-testid="auto-quick" />
+        {t('autoQuick')}
+      </label>
+      {/* Not a <label>: clicking its text would press Choose and open the dialog. */}
+      <div className="field-row">
+        <span>{t('outputDir')}</span>
+        <div>
+          <OutputDirField t={t} value={settings.outputDir} onSaved={onSaved} onClear={() => void onChange({ outputDir: '' })} />
+          <p className="muted small">{t('outputDirHint')}</p>
+        </div>
+      </div>
       <label>
         {t('dataScope')}
         <select value={settings.dataScope} onChange={(e) => onChange({ dataScope: e.target.value as DataScope })} data-testid="data-scope">
@@ -262,9 +308,6 @@ function EffortSelect(props: { value: Effort | ''; onChange: (e: Effort) => void
 function AgentRow(props: { label: string; engine: AgentEngine; settings: SettingsT; t: T; onChange: (e: AgentEngine) => void }) {
   const { engine, settings, t } = props;
   const pi = settings.harnesses.find((h) => h.id === engine.harnessId)?.kind === 'pi';
-  // The built-in Pi agent uses a model connection; empty = the one for short answers.
-  const provider = settings.providers.find((p) => p.id === (engine.providerId || settings.defaults.direct.providerId));
-  const model = engine.model || provider?.selection?.model || settings.defaults.direct.model;
   return (
     <tr>
       <th>{props.label}</th>
@@ -274,23 +317,20 @@ function AgentRow(props: { label: string; engine: AgentEngine; settings: Setting
             <option key={h.id} value={h.id}>{h.label}</option>
           ))}
         </select>
-        {pi && (
-          <select value={engine.providerId ?? ''} onChange={(e) => props.onChange({ ...engine, providerId: e.target.value, model: '', effort: 'default' })} data-testid="pi-connection">
-            <option value="">{t('sameAsAnswers')}</option>
-            {settings.providers
-              .filter((p) => p.kind === 'fake' || p.selection)
-              .map((p) => (
-                <option key={p.id} value={p.id}>{p.label}</option>
-              ))}
-          </select>
-        )}
       </td>
-      <td>
-        <ModelInput id="agent" value={engine.model} kind={pi ? (provider?.kind ?? 'anthropic') : 'anthropic'} placeholder={pi ? t('connectionModelDefault') : undefined} onCommit={(m) => props.onChange({ ...engine, model: m })} />
-      </td>
-      <td>
-        <EffortSelect value={engine.effort} provider={pi ? provider : undefined} model={model} onChange={(effort) => props.onChange({ ...engine, effort })} />
-      </td>
+      {pi ? (
+        // Pi uses the same connection, model and effort as every other skill.
+        <td colSpan={2} className="muted small">{t('piSameAsAnswers')}</td>
+      ) : (
+        <>
+          <td>
+            <ModelInput id="agent" value={engine.model} kind="anthropic" onCommit={(m) => props.onChange({ ...engine, model: m })} />
+          </td>
+          <td>
+            <EffortSelect value={engine.effort} onChange={(effort) => props.onChange({ ...engine, effort })} />
+          </td>
+        </>
+      )}
       <td>
         <div className="row">
           <input
@@ -482,7 +522,7 @@ function Harnesses({ settings, t, onChange }: PaneProps) {
   );
 }
 
-function Skills({ settings, skills, t, onChange, onSkills }: PaneProps) {
+function Skills({ settings, skills, t, onChange, onSkills, onSaved }: PaneProps) {
   const [editing, setEditing] = useState<{ parsed: ParsedSkill; previous?: string } | null>(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -586,6 +626,7 @@ function Skills({ settings, skills, t, onChange, onSkills }: PaneProps) {
                 open={open === s.name}
                 onToggleOpen={() => setOpen(open === s.name ? null : s.name)}
                 onOverride={(patch) => override(s.name, patch).then(async () => onSkills(await api.skills.list()))}
+                onSaved={onSaved}
                 onMove={(d) => move(i, d)}
                 onEdit={async () => {
                   const r = await api.skills.read(s.name);
@@ -614,6 +655,7 @@ function SkillRow(props: {
   open: boolean;
   onToggleOpen: () => void;
   onOverride: (p: SkillOverride) => void;
+  onSaved: (s: SettingsT) => void;
   onMove: (d: -1 | 1) => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -669,7 +711,19 @@ function SkillRow(props: {
           <td colSpan={3}>
             <div className="row wrap">
               <span className="muted">{t('overrides')}:</span>
-              {s.runner === 'direct' ? (
+              {s.runner === 'agent' && s.source !== 'builtin' && (
+                <select
+                  value={o.agent?.harnessId ?? ''}
+                  onChange={(e) => props.onOverride({ agent: { ...o.agent, harnessId: e.target.value || undefined } })}
+                >
+                  <option value="">{t('harness')}: {t('inherit')}</option>
+                  {settings.harnesses.map((h) => (
+                    <option key={h.id} value={h.id}>{h.label}</option>
+                  ))}
+                </select>
+              )}
+              {/* Skills on the built-in Pi agent choose a connection like every other skill. */}
+              {s.runner === 'direct' || s.source === 'builtin' || settings.harnesses.find((h) => h.id === (o.agent?.harnessId || settings.defaults.agent.harnessId))?.kind === 'pi' ? (
                 <>
                   <select
                     value={o.direct?.providerId ?? ''}
@@ -697,15 +751,6 @@ function SkillRow(props: {
                 </>
               ) : (
                 <>
-                  <select
-                    value={o.agent?.harnessId ?? ''}
-                    onChange={(e) => props.onOverride({ agent: { ...o.agent, harnessId: e.target.value || undefined } })}
-                  >
-                    <option value="">{t('harness')}: {t('inherit')}</option>
-                    {settings.harnesses.map((h) => (
-                      <option key={h.id} value={h.id}>{h.label}</option>
-                    ))}
-                  </select>
                   <ModelInput
                     id={`skill-${s.name}`}
                     value={o.agent?.model ?? ''}
@@ -719,6 +764,27 @@ function SkillRow(props: {
                     onChange={(effort) => props.onOverride({ agent: { ...o.agent, effort: effort || undefined } })}
                   />
                 </>
+              )}
+            </div>
+            <div className="row wrap">
+              <span className="muted">{t('outputDir')}:</span>
+              <select
+                value={o.outputDir === undefined ? 'inherit' : o.outputDir === '' ? 'off' : 'own'}
+                onChange={(e) => {
+                  if (e.target.value === 'own') void api.settings.chooseOutputDir(s.name).then((x) => x && props.onSaved(x));
+                  else props.onOverride({ outputDir: e.target.value === 'off' ? '' : undefined });
+                }}
+                data-testid={`skill-output-${s.name}`}
+              >
+                <option value="inherit">{t('outputDirInherit')}{settings.outputDir ? ` (${settings.outputDir})` : ` (${t('outputDirNone')})`}</option>
+                <option value="off">{t('outputDirOff')}</option>
+                <option value="own">{o.outputDir ? o.outputDir : `${t('choose')}…`}</option>
+              </select>
+              {o.outputDir && (
+                <button onClick={() => void api.settings.chooseOutputDir(s.name).then((x) => x && props.onSaved(x))}>
+                  <Icon name="folder" size={15} />
+                  {t('choose')}
+                </button>
               )}
             </div>
           </td>

@@ -88,6 +88,8 @@ export interface SkillOverride {
   output?: OutputKind;
   direct?: Partial<DirectEngine>;
   agent?: Partial<AgentEngine>;
+  /** Where this skill's results are saved: unset = Settings.outputDir, '' = not saved, else a folder chosen in a dialog. */
+  outputDir?: string;
 }
 
 /** How much of the document leaves the computer with a request. */
@@ -101,7 +103,15 @@ export interface Settings {
   /** 'ui' follows the interface language; otherwise a BCP-47 code or language name. */
   explainLang: string;
   hotkey: string;
+  /** Scrolls the document to the focused card's term and highlights it. */
+  locateHotkey: string;
+  /** Drag over part of a document to explain its text or picture. */
+  captureHotkey: string;
   quickSkill: string;
+  /** A new card starts the quick skill at once (short-answer skills only). */
+  autoQuick: boolean;
+  /** Folder finished results are copied into; empty = not saved. Chosen in a main-process dialog. */
+  outputDir: string;
   /** Context sent with each lookup. 'document' needs explicit consent (granted in the main process). */
   dataScope: DataScope;
   profile: string;
@@ -160,6 +170,8 @@ export interface JobRequest {
   explainLang: string;
   direct?: Partial<DirectEngine>;
   agent?: Partial<AgentEngine>;
+  /** A captured area of the document (its picture is sent along), see main/captures.ts. */
+  image?: string;
   /** Skip the result cache. */
   force?: boolean;
   /** 'auto' = started without a click (e.g. the quick explanation). Agent skills never start automatically. */
@@ -195,6 +207,10 @@ export interface JobState {
   interrupted?: boolean;
   /** Where the request went: endpoint host or harness, model, and how much context. */
   recipient?: string;
+  /** The copy of the result in the chosen output folder. */
+  savedTo?: string;
+  /** Copying the result to the output folder failed (the result itself is fine). */
+  saveError?: string;
 }
 
 export interface Rect {
@@ -229,6 +245,40 @@ export interface CardTask {
   request: JobRequest;
 }
 
+/**
+ * Where a picked term is in its document, to find it again: the exact text with
+ * some text on either side, and its position (characters, whitespace not
+ * counted) in the reader's text, or in its page for PDFs.
+ */
+export interface TermLocator {
+  quote: string;
+  prefix: string;
+  suffix: string;
+  index?: number;
+  /** PDF page, from 1. */
+  page?: number;
+  /** A captured area: where it was, as fractions of its PDF page or of the scrolled content. */
+  region?: Region;
+}
+
+/** Fractions of a PDF page or of a reader's scrolled content; on web pages (`px`), CSS pixels from the page's top left, since pages grow. */
+export interface Region {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  px?: boolean;
+}
+
+/** The picture of a captured area. */
+export interface CardCapture {
+  id: string;
+  w: number;
+  h: number;
+  /** The picture goes with each run. False when the area held only text: the text says it all, and any model can read it. */
+  send: boolean;
+}
+
 /** One picked term. Its context is fixed when the term is picked. */
 export interface TermCard {
   id: string;
@@ -242,9 +292,14 @@ export interface TermCard {
   tasks: CardTask[];
   activeTask?: string;
   createdAt: number;
+  /** Missing on cards saved before terms could be located; the sentence is used then. */
+  locator?: TermLocator;
+  /** Cards made from a captured area: its picture goes with every run. */
+  capture?: CardCapture;
 }
 
-export type DocKind = 'web' | 'pdf' | 'docx' | 'markdown' | 'text' | 'html';
+/** 'code': source code and data files (Python, JSON, YAML …), shown as monospaced lines. */
+export type DocKind = 'web' | 'pdf' | 'docx' | 'markdown' | 'text' | 'html' | 'code';
 
 export interface DocInfo {
   docId: string;
@@ -265,4 +320,6 @@ export interface PickedTerm {
   context: TermContext;
   /** Client rect of the term, in the reader's coordinate space. */
   rect: { x: number; y: number; width: number; height: number };
+  locator?: TermLocator;
+  capture?: CardCapture;
 }

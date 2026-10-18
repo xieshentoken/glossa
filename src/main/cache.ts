@@ -32,6 +32,8 @@ export interface CacheIdentity {
   explainLang: string;
   profile: string;
   theme: string;
+  /** A captured area's picture (its content hash), sent along with the passage. */
+  image?: string;
   /** Engine identity: provider/harness id, endpoint or command, model and generation parameters. No secrets. */
   engine: Record<string, string | number | boolean>;
 }

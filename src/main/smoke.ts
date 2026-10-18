@@ -3,7 +3,6 @@
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import http from 'node:http';
 import { runConnectionSmoke } from './connection-smoke';
 import path from 'node:path';
 import { net, session, webContents as allContents, type BrowserWindow } from 'electron';
@@ -20,15 +19,18 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: JobManager; skills: SkillRegistry; docs: DocumentService }): Promise<number> {
   const dir = process.env.GLOSSA_SMOKE_DIR!;
-  // Fixture web page, served from this process.
-  const server = http.createServer((_req, res) => {
-    res.setHeader('content-type', 'text/html; charset=utf-8');
-    res.end(`<!doctype html><html lang="en"><head><title>Plants</title></head><body><main>
+  // Fixture web page. Served inside the web view's own session at an https address, so the web
+  // steps need no loopback connection (refused on some machines); other addresses load normally.
+  const FIXTURE_HOST = 'fixture.glossa.test';
+  const fixturePage = `<!doctype html><html lang="en"><head><title>Plants</title></head><body><main>
 <h1>How plants eat</h1><p>Leaves capture light through photosynthesis, turning carbon dioxide and water into sugar.</p>
-</main></body></html>`);
-  });
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
-  const url = process.env.GLOSSA_SMOKE_WEB_URL || `http://127.0.0.1:${(server.address() as { port: number }).port}/plants`;
+</main></body></html>`;
+  session.fromPartition(WEB_PARTITION).protocol.handle('https', (req) =>
+    new URL(req.url).host === FIXTURE_HOST
+      ? new Response(fixturePage, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+      : net.fetch(req, { bypassCustomProtocolHandlers: true }),
+  );
+  const url = process.env.GLOSSA_SMOKE_WEB_URL || `https://${FIXTURE_HOST}/plants`;
   const wc = win.webContents;
   const log = (...a: unknown[]) => console.log('[smoke]', ...a);
   const js = <T = unknown>(code: string): Promise<T> => wc.executeJavaScript(code, true);
@@ -77,11 +79,11 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
   // Cards of the active document; the newest is last.
   const CARDS = `[...document.querySelectorAll('.card-layer [data-testid=term-card]')]`;
   const LAST = `${CARDS}.at(-1)`;
-  const cardTerms = () => js<string[]>(`${CARDS}.map((c) => c.querySelector('.term-input').value)`);
+  const cardTerms = () => js<string[]>(`${CARDS}.map((c) => c.dataset.term)`);
   /** The term of the card a pick just created (earlier cards stay). */
   const newCardTerm = async (before: number) => {
     await waitFor('new card', `${CARDS}.length > ${before}`);
-    return js<string>(`${LAST}.querySelector('.term-input').value`);
+    return js<string>(`${LAST}.dataset.term`);
   };
   const clickSkill = (text: string, card = LAST) =>
     js(`(() => { const b = [...(${card}?.querySelectorAll('.skills-row button') ?? [])].find(b => b.textContent.includes(${JSON.stringify(text)})); b?.click(); return !!b; })()`);
@@ -118,6 +120,9 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
   deps.store.setSettings({
     agentsEnabled: true,
     uiLang: 'en',
+    // The flow below checks what each click starts; the automatic quick explanation has its own section.
+    autoQuick: false,
+    outputDir: '',
     // Screenshots of the light theme: GLOSSA_SMOKE_THEME=light.
     ...(process.env.GLOSSA_SMOKE_THEME === 'light' || process.env.GLOSSA_SMOKE_THEME === 'dark' ? { theme: process.env.GLOSSA_SMOKE_THEME } : {}),
     defaults: {
@@ -352,6 +357,9 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
   log('long pdf: pages 80, max live canvases while scrolling', maxLive, ', live at end', liveAtEnd, ', last page rendered', lastRendered);
   if (!lastRendered || liveAtEnd >= 80 || maxLive >= 80) throw new Error('pdf pages were not released');
   key('Escape');
+  // Input events and executeJavaScript are not ordered: without a pause the tab switch below can come
+  // first, and the late Escape then closes the card that takes the keyboard when the PDF's cards return.
+  await sleep(200);
 
   // --- a skill that works in its job folder, on the built-in Pi agent -------------
   // (Quick and ELI5 above already ran on it, as short answers.)
@@ -413,11 +421,329 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
   await js(`[...document.querySelectorAll('[data-testid=task-row]')].find((r) => r.textContent.includes('Laminar') && r.textContent.includes('Anatomy')).querySelector('button.link').click()`);
   await waitFor('card back from the task panel', `${CARDS}.length === 2 && !document.querySelector('[data-testid=tasks-panel]')`);
   await doneResult('anatomy', LAST, 10000);
-  if ((await js<string>(`${LAST}.querySelector('.term-input').value`)) !== 'Laminar') throw new Error('task panel opened the wrong card');
+  if ((await js<string>(`${LAST}.dataset.term`)) !== 'Laminar') throw new Error('task panel opened the wrong card');
   const resultHeight = await js<number>(`${LAST}.querySelector('[data-testid=task-view] iframe').getBoundingClientRect().height`);
   if (resultHeight < 200) throw new Error(`reopened card too small for its result (${resultHeight}px)`);
   log('closing a card kept its runs going; the task panel brought it back with the Anatomy result');
   await shoot('5c-reopened');
+
+  // --- multi-column reading: panels left / middle / right ---------------------------
+  await js(`document.querySelector('[data-testid=layout-3]').click()`);
+  await waitFor('three panels', `document.querySelectorAll('.reader.shown').length === 3`);
+  const panelInfo = () =>
+    js<{ region: string; left: number; width: number; zoom: number; title: string; active: boolean }[]>(`(() => {
+      const a = document.querySelector('.reader-area').getBoundingClientRect();
+      return [...document.querySelectorAll('.reader.shown')].map((r) => {
+        const b = r.getBoundingClientRect();
+        return { region: r.dataset.region, left: Math.round(b.left - a.left), width: Math.round(b.width), zoom: Number(r.dataset.zoom),
+          title: r.querySelector('[data-testid=panel-doc]').selectedOptions[0].textContent, active: r.classList.contains('active') };
+      }).sort((x, y) => x.left - y.left);
+    })()`);
+  const areaW = await js<number>(`document.querySelector('.reader-area').getBoundingClientRect().width`);
+  let three = await panelInfo();
+  log('three panels', JSON.stringify(three.map((p) => `${p.region}:${p.title}@${p.left}`)));
+  if (three.map((p) => p.region).join() !== 'left,middle,right' || three.some((p, i) => Math.abs(p.left - (areaW * i) / 3) > 2 || Math.abs(p.width - areaW / 3) > 2)) {
+    throw new Error('panels not placed left / middle / right');
+  }
+  // Every shown document's cards are there; move them to the dock to read freely.
+  const floating = await js<string[]>(`${CARDS}.map((c) => c.dataset.term)`);
+  if (!floating.includes('对流换热') || !floating.includes('Reynolds') || !floating.includes('Laminar')) throw new Error(`cards of shown documents: ${floating}`);
+  for (let i = 0; i < floating.length; i++) await js(`${CARDS}[0].querySelector('.card-head button[title=Minimize]').click()`);
+  await waitFor('cards docked', `${CARDS}.length === 0`);
+  // Pick a term in the right panel (the long PDF): Alt+Q works where the mouse is.
+  // An earlier step left it at the very end, below the last page's text.
+  await js(`document.querySelector('.reader[data-region=right] .doc-scroll').scrollTop -= 500`);
+  const rightPoint = await waitFor<{ x: number; y: number } | null>('visible word in the right panel', `(() => {
+    const panel = document.querySelector('.reader[data-region=right] .doc-scroll').getBoundingClientRect();
+    for (const span of document.querySelectorAll('.reader[data-region=right] .textLayer span')) {
+      const i = span.textContent.indexOf('Viscosity');
+      if (i < 0) continue;
+      const r = document.createRange(); r.setStart(span.firstChild, i); r.setEnd(span.firstChild, i + 9);
+      const b = r.getBoundingClientRect();
+      if (b.width > 0 && b.top > panel.top + 10 && b.bottom < panel.bottom - 10 && b.left > panel.left) return { x: Math.round(b.left + 4), y: Math.round(b.top + b.height / 2) };
+    }
+    return null;
+  })()`, 15000).catch(async (e: Error) => {
+    const dbg = await js<string>(`(() => { const r = document.querySelector('.reader[data-region=right]'); const s = r.querySelector('.doc-scroll'); const sp = [...r.querySelectorAll('.textLayer span')]; const b = s.getBoundingClientRect();
+      const vis = sp.map((x) => [x.textContent.slice(0, 20), Math.round(x.getBoundingClientRect().left), Math.round(x.getBoundingClientRect().top)]).slice(0, 6);
+      return JSON.stringify({ tab: r.dataset.tab, title: r.querySelector('select').selectedOptions[0].textContent, pages: r.querySelectorAll('.pdf-page').length, canv: r.querySelectorAll('canvas').length, spans: sp.length, top: s.scrollTop, h: s.scrollHeight, left: s.scrollLeft, w: s.scrollWidth, box: [b.left, b.top, b.width, b.height], vis }); })()`);
+    throw new Error(`${e.message}: ${dbg}`);
+  });
+  if (!rightPoint) throw new Error('no visible word in the right panel');
+  wc.sendInputEvent({ type: 'mouseMove', x: rightPoint.x, y: rightPoint.y });
+  await sleep(50);
+  key('Q', ['alt']);
+  await waitFor('highlight', `!!document.querySelector('[data-glossa-overlay]')`, 3000);
+  key('Return');
+  if ((await newCardTerm(0)) !== 'Viscosity') throw new Error('pick in the right panel failed');
+  three = await panelInfo();
+  if (!three[2].active) throw new Error('the panel of the pick did not become active');
+  await sleep(500);
+  const longId = deps.store.recentDocs().find((d) => d.source.endsWith('long.pdf'))!.docId;
+  if (!deps.store.getDoc(longId)?.termCards?.some((c) => c.term === 'Viscosity')) throw new Error('card not saved with the right panel’s document');
+  log('term lookup in the right panel; the card belongs to its document');
+
+  // Zoom: Ctrl+wheel (trackpad pinch) on the left panel, a two-finger touch pinch on the middle one.
+  const centre = (region: string) =>
+    js<{ x: number; y: number }>(`(() => { const b = document.querySelector('.reader[data-region=${region}] .reader-body').getBoundingClientRect(); return { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) }; })()`);
+  const lc = await centre('left');
+  wc.sendInputEvent({ type: 'mouseWheel', x: lc.x, y: lc.y, deltaX: 0, deltaY: 120, wheelTicksY: 1, modifiers: ['control'] } as Electron.MouseWheelInputEvent);
+  await waitFor('left panel zoomed', `Number(document.querySelector('.reader[data-region=left]').dataset.zoom) !== 1`);
+  const mc = await centre('middle');
+  const touch = (type: string, id: number, x: number) =>
+    js(`document.querySelector('.reader[data-region=middle] .reader-body').dispatchEvent(new PointerEvent('${type}', { bubbles: true, cancelable: true, pointerId: ${id}, pointerType: 'touch', isPrimary: ${id === 11}, clientX: ${x}, clientY: ${mc.y} }))`);
+  await touch('pointerdown', 11, mc.x - 50);
+  await touch('pointerdown', 12, mc.x + 50);
+  await touch('pointermove', 12, mc.x + 150); // fingers spread: 100 → 200 px
+  await touch('pointerup', 12, mc.x + 150);
+  await touch('pointerup', 11, mc.x - 50);
+  await waitFor('middle panel pinched', `Number(document.querySelector('.reader[data-region=middle]').dataset.zoom) === 2`);
+  three = await panelInfo();
+  log('zoom per panel', JSON.stringify(three.map((p) => `${p.region}:${p.zoom}`)));
+  if (three[0].zoom === 1 || three[1].zoom !== 2 || three[2].zoom !== 1) throw new Error('zoom did not stay with its panel');
+  // Ctrl+0 and Ctrl+= go to the active panel (the middle one, touched last), not the whole window.
+  wc.sendInputEvent({ type: 'keyDown', keyCode: '0', modifiers: ['control'] });
+  await waitFor('Ctrl+0 resets the active panel', `Number(document.querySelector('.reader[data-region=middle]').dataset.zoom) === 1`);
+  wc.sendInputEvent({ type: 'keyDown', keyCode: '=', modifiers: ['control'] });
+  await waitFor('Ctrl+= zooms the active panel', `Number(document.querySelector('.reader[data-region=middle]').dataset.zoom) > 1`);
+  if (wc.getZoomFactor() !== 1) throw new Error('the window itself was zoomed');
+  log('pinch, Ctrl+wheel and Ctrl+= / Ctrl+0 zoom only their panel');
+
+  // The card title is renamed with its edit button; the title itself is part of the drag handle.
+  const vCard = `${CARDS}.find((c) => c.dataset.term === 'Viscosity')`;
+  await js(`${vCard}.querySelector('.edit-term').click()`);
+  await waitFor('rename field', `!!${vCard}.querySelector('input.term-input')`);
+  await js(`(() => { const i = ${vCard}.querySelector('input.term-input'); i.value = 'Viscosity (fluids)'; i.blur(); })()`);
+  await waitFor('renamed', `${CARDS}.some((c) => c.dataset.term === 'Viscosity (fluids)')`);
+  // Stop right in the card after an accidental click, and Stop all in the task panel.
+  const v2 = `${CARDS}.find((c) => c.dataset.term === 'Viscosity (fluids)')`;
+  process.env.GLOSSA_PI_DEMO_DELAY_MS = '600000';
+  await clickSkill('Quick', v2);
+  await waitFor('stop button while working', `!!${v2}.querySelector('[data-testid=stop-run]')`, 8000);
+  await js(`${v2}.querySelector('[data-testid=stop-run]').click()`);
+  await waitFor('stopped from the card', `${v2}.querySelector('[data-testid=task-view]')?.dataset.status === 'cancelled'`, 8000);
+  await clickSkill('ELI5', v2);
+  await waitFor('second run working', `${v2}.querySelector('[data-testid=task-view][data-skill=eli5]')?.dataset.status === 'running'`, 8000);
+  await js(`document.querySelector('[data-testid=tasks-button]').click()`);
+  await waitFor('stop all', `!!document.querySelector('[data-testid=stop-all]')`);
+  await js(`document.querySelector('[data-testid=stop-all]').click()`);
+  await waitFor('stopped by Stop all', `${v2}.querySelector('[data-testid=task-view]')?.dataset.status === 'cancelled'`, 8000);
+  await js(`document.querySelector('[data-testid=tasks-button]').click()`);
+  delete process.env.GLOSSA_PI_DEMO_DELAY_MS;
+  log('rename with the edit button; Stop in the card and Stop all');
+
+  // Back from the dock; the HTML result can be read as plain text and rendered again.
+  for (const term of floating) await js(`[...document.querySelectorAll('[data-testid=dock-item]')].find((d) => d.querySelector('.dock-term').textContent === ${JSON.stringify(term)})?.click()`);
+  await waitFor('cards back', `${CARDS}.length === 4`);
+  const rCard = `${CARDS}.find((c) => c.dataset.term === 'Reynolds')`;
+  await js(`${rCard}.querySelector('[data-testid=view-toggle]').click()`);
+  const plainShown = await waitFor<string>('plain view', `${rCard}.querySelector('[data-testid=plain-text]')?.textContent.includes('Reynolds') && ${rCard}.querySelector('[data-testid=plain-text]').textContent`);
+  if (/<h1|<p>/.test(plainShown)) throw new Error('plain view shows markup');
+  await shoot('8-three-panels');
+  await js(`${rCard}.querySelector('[data-testid=view-toggle]').click()`);
+  await waitFor('rendered again', `!!${rCard}.querySelector('[data-testid=task-view] iframe')`);
+  log('HTML result toggled to plain text and back');
+
+  await js(`document.querySelector('[data-testid=layout-2]').click()`);
+  await waitFor('two panels', `document.querySelectorAll('.reader.shown').length === 2`);
+  const two = await panelInfo();
+  if (two.map((p) => p.region).join() !== 'left,right') throw new Error('two panels are not left and right');
+  await shoot('8b-two-panels');
+  await js(`[...document.querySelectorAll('.tab')].find((x) => x.title.endsWith('sample.pdf')).click()`);
+  await js(`document.querySelector('[data-testid=layout-1]').click()`);
+  await waitFor('one panel again', `document.querySelectorAll('.reader.shown').length === 1 && document.querySelector('.reader.shown').dataset.tab === document.querySelector('.reader.active').dataset.tab`);
+  if (!(await js<string>(`document.querySelector('.reader.active [data-testid=panel-doc]') === null && document.querySelector('.tab.on').title`)).endsWith('sample.pdf')) throw new Error('one-panel layout lost the document');
+  log('two panels left / right, back to one panel with the same document');
+
+  // --- source code, the quick explanation on its own, results saved, "show in document" ---------
+  const code = Array.from({ length: 160 }, (_, i) => `    total_${i} = compute(${i})  # step ${i}`);
+  code.splice(0, 0, 'def drag(rho, v, area, cd):', '    # Aerodynamic drag on a moving body, from its kinematic viscosity.');
+  fs.writeFileSync(path.join(dir, 'flow.py'), `import math\n\n${code.join('\n')}\n`);
+  fs.writeFileSync(path.join(dir, 'page.html'), '<!doctype html><html><head><title>Local page</title></head><body><p>Bernoulli’s principle links speed and pressure.</p></body></html>');
+  const outDir = path.join(deps.store.dir, 'saved-results');
+  // The folder dialog cannot be driven here: set as the dialog would (main side).
+  deps.store.setSettings({ outputDir: outDir });
+  await js(`window.__glossaTest.openPath(${JSON.stringify(path.join(dir, 'flow.py'))})`);
+  await waitFor('code document', `document.querySelector('.reader.active .code-doc')?.textContent.includes('kinematic viscosity')`);
+  const codeInfo = await js<{ kind: string; lines: number; first: string }>(`(() => ({
+    kind: document.querySelector('.tab.on .tab-kind').textContent,
+    lines: document.querySelectorAll('.reader.active .code-line').length,
+    first: document.querySelector('.reader.active .code-line').textContent,
+  }))()`);
+  // Line numbers are drawn by CSS, so they are not part of the text that is picked or sent.
+  if (codeInfo.kind !== 'PY' || codeInfo.lines !== 164 || codeInfo.first !== 'import math\n') throw new Error(`code view: ${JSON.stringify(codeInfo)}`);
+  // Turned on in Settings → General, as a user would.
+  const toggleAutoQuick = async (on: boolean) => {
+    await js(`document.querySelector('.topbar button.icon[title=Settings]').click()`);
+    await waitFor('settings', `!!document.querySelector('[data-testid=auto-quick]')`);
+    await js(`document.querySelector('[data-testid=auto-quick]').click()`);
+    // A controlled checkbox: it shows the new state once the main process has stored it.
+    await waitFor('auto quick shown', `document.querySelector('[data-testid=auto-quick]').checked === ${on}`, 3000);
+    if (deps.store.getSettings().autoQuick !== on) throw new Error('auto quick setting not stored');
+    await js(`document.querySelector('.modal-head button').click()`);
+  };
+  await toggleAutoQuick(true);
+  await pickWithMouse('.reader.active .code-doc', 'viscosity');
+  key('Return');
+  if ((await newCardTerm(0)) !== 'viscosity') throw new Error('code pick');
+  // No click: the quick explanation starts with the card.
+  await doneResult('quick-gloss');
+  const autoRuns = await js<string[]>(`[...${LAST}.querySelectorAll('.skills-row .chip-status')].map((x) => x.closest('button').dataset.skill)`);
+  const savedLink = await waitFor<string>('saved link', `${LAST}.querySelector('[data-testid=saved-to]')?.title`);
+  const savedFile = path.join(outDir, 'flow.py', 'viscosity - Quick.md');
+  if (autoRuns.join() !== 'quick-gloss' || !savedLink.endsWith(savedFile) || !fs.readFileSync(savedFile, 'utf8').includes('offline sample explanation (quick-gloss')) {
+    throw new Error(`auto quick / saved copy: ${JSON.stringify({ autoRuns, savedLink })}`);
+  }
+  log('code file opened as numbered lines; Alt+Q started Quick by itself; result saved to', savedFile);
+  await shoot('9-code-auto');
+  /** The highlight is drawn and the term is inside its panel's visible part (and, if asked, clear of the card). */
+  const SCROLL = '.reader.active .doc-scroll';
+  const located = () =>
+    waitFor<{ hit: boolean; inView: boolean; clear: boolean }>(
+      'highlight',
+      `(() => {
+        const o = document.querySelector('[data-glossa-locate] div');
+        if (!o) return null;
+        const h = o.getBoundingClientRect();
+        const s = document.querySelector('${SCROLL}').getBoundingClientRect();
+        const c = ${LAST}.getBoundingClientRect();
+        const clear = h.bottom < c.top || h.top > c.bottom || h.right < c.left || h.left > c.right;
+        return { hit: h.width > 0, inView: h.top >= s.top && h.bottom <= s.bottom, clear };
+      })()`,
+      8000,
+    );
+  const clearHighlight = () => js(`document.querySelectorAll('[data-glossa-locate]').forEach((x) => x.remove())`);
+  const scrollTo = (where: 'top' | 'bottom') => js(`(() => { const s = document.querySelector('${SCROLL}'); s.scrollTop = ${where === 'top' ? 0 : 's.scrollHeight'}; })()`);
+  await scrollTo('bottom');
+  await sleep(100);
+  if (await js(textRect('.reader.active .code-doc', 'kinematic viscosity')).then((p) => p && (p as { y: number }).y > 0 && (p as { y: number }).y < 800)) throw new Error('term still in view after scrolling away');
+  await js(`${LAST}.querySelector('[data-testid=locate-term]').click()`);
+  const byButton = await located();
+  if (!byButton.hit || !byButton.inView || !byButton.clear) throw new Error(`locate by button: ${JSON.stringify(byButton)}`);
+  await shoot('9b-located');
+  await clearHighlight();
+  await scrollTo('bottom');
+  await sleep(100);
+  // The hotkey also works with the keyboard in the document: it is for the card last used.
+  await js(`document.querySelector('.reader.active .code-doc').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
+  key('L', ['alt']);
+  const byKey = await located();
+  if (!byKey.hit || !byKey.inView) throw new Error(`locate by Alt+L: ${JSON.stringify(byKey)}`);
+  log('"show in document" by button and by Alt+L scrolled back to the term and highlighted it, clear of the card');
+  await clearHighlight();
+  // A long PDF: every page has the same sentence; the card goes back to its own page.
+  await js(`window.__glossaTest.openPath(${JSON.stringify(path.join(dir, 'long.pdf'))})`);
+  await waitFor('long pdf', `document.querySelectorAll('.reader.active .pdf-page').length === 80`, 20000);
+  await js(`(() => { const s = document.querySelector('${SCROLL}'); const p = document.querySelector('.reader.active .pdf-page[data-page="2"]'); s.scrollTop += p.getBoundingClientRect().top - s.getBoundingClientRect().top; })()`);
+  await waitFor('page 2 text', `[...document.querySelectorAll('.reader.active .pdf-page[data-page="2"] .textLayer span')].some((s) => s.textContent.includes('Viscosity'))`, 20000);
+  await pickWithMouse('.reader.active .pdf-page[data-page="2"] .textLayer', 'Viscosity');
+  key('Return');
+  if ((await newCardTerm(0)) !== 'Viscosity') throw new Error('pdf pick on page 2');
+  await sleep(500);
+  const pdfLoc = deps.store.getDoc(deps.store.recentDocs().find((d) => d.source.endsWith('long.pdf'))!.docId)?.termCards?.at(-1)?.locator;
+  if (pdfLoc?.page !== 2) throw new Error(`pdf locator: ${JSON.stringify(pdfLoc)}`);
+  await scrollTo('bottom');
+  await sleep(300);
+  await js(`${LAST}.querySelector('[data-testid=locate-term]').click()`);
+  const inPdf = await located();
+  const onPage = await js<boolean>(`(() => { const h = document.querySelector('[data-glossa-locate] div').getBoundingClientRect(); const p = document.querySelector('.reader.active .pdf-page[data-page="2"]').getBoundingClientRect(); return h.top >= p.top && h.bottom <= p.bottom; })()`);
+  if (!inPdf.hit || !inPdf.inView || !onPage) throw new Error(`locate in pdf: ${JSON.stringify({ inPdf, onPage, pdfLoc })}`);
+  log('PDF: from page 80 back to the term on page 2, highlighted', JSON.stringify(pdfLoc));
+  await shoot('9c-located-pdf');
+  await clearHighlight();
+  // --- capturing an area: text of a PDF page with its picture; found again; plain text alone ---------
+  /** Drags with real mouse events in the app window (the capture overlay gets them, over web pages too). */
+  const dragArea = async (a: { x: number; y: number }, b: { x: number; y: number }) => {
+    await waitFor('capture overlay', `!!document.querySelector('[data-testid=area-capture]')`, 3000);
+    wc.sendInputEvent({ type: 'mouseMove', x: a.x, y: a.y });
+    wc.sendInputEvent({ type: 'mouseDown', x: a.x, y: a.y, button: 'left', clickCount: 1 });
+    for (let i = 1; i <= 5; i++) {
+      wc.sendInputEvent({ type: 'mouseMove', x: Math.round(a.x + ((b.x - a.x) * i) / 5), y: Math.round(a.y + ((b.y - a.y) * i) / 5), modifiers: ['leftbuttondown'] });
+      await sleep(30);
+    }
+    wc.sendInputEvent({ type: 'mouseUp', x: b.x, y: b.y, button: 'left', clickCount: 1 });
+  };
+  /** A client box of the given text in the app window, or of an element (`needle` = null). */
+  const boxOf = (scope: string, needle: string | null) =>
+    js<{ left: number; top: number; right: number; bottom: number }>(`(() => {
+      const root = document.querySelector(${JSON.stringify(scope)});
+      let b = root.getBoundingClientRect();
+      if (${JSON.stringify(needle)}) {
+        const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let n = w.nextNode(); n; n = w.nextNode()) { const i = n.data.indexOf(${JSON.stringify(needle)}); if (i < 0) continue;
+          const r = document.createRange(); r.setStart(n, i); r.setEnd(n, i + ${JSON.stringify(needle ?? '')}.length); b = r.getBoundingClientRect(); break; }
+      }
+      return { left: Math.round(b.left), top: Math.round(b.top), right: Math.round(b.right), bottom: Math.round(b.bottom) };
+    })()`);
+  const savedCards = (source: string) => deps.store.getDoc(deps.store.recentDocs().find((d) => d.source.endsWith(source))!.docId)?.termCards ?? [];
+  await js(`${LAST}.querySelector('.card-head button[title=Close]').click()`);
+  await js(`(() => { const s = document.querySelector('${SCROLL}'); const p = document.querySelector('.reader.active .pdf-page[data-page="2"]'); s.scrollTop += p.getBoundingClientRect().top - s.getBoundingClientRect().top - 40; })()`);
+  await waitFor('page 2 text', `[...document.querySelectorAll('.reader.active .pdf-page[data-page="2"] .textLayer span')].some((s) => s.textContent.includes('resists'))`, 20000);
+  const pdfCardsBefore = await js<number>(`${CARDS}.length`);
+  key('A', ['alt']);
+  const sentence = await boxOf('.reader.active .pdf-page[data-page="2"] .textLayer', 'Viscosity resists the relative motion');
+  await dragArea({ x: sentence.left - 4, y: sentence.top - 4 }, { x: sentence.right + 4, y: sentence.bottom + 4 });
+  await newCardTerm(pdfCardsBefore);
+  const areaTerm = await js<string>(`${LAST}.dataset.term`);
+  // Quick starts by itself here too; the PDF page is drawn, so its picture goes along.
+  const areaBody = await (await net.fetch(await doneResult('quick-gloss'))).text();
+  const pic = await waitFor<number>('area picture', `${LAST}.querySelector('[data-testid=area-picture] img')?.naturalWidth`);
+  await sleep(500);
+  const pdfArea = savedCards('long.pdf').at(-1)!;
+  // What leaves the computer is said on the card before any run: the picture too.
+  if (!(await js<string>(`${LAST}.querySelector('[data-testid=recipient]').textContent`)).endsWith('· picture')) throw new Error('card does not say the picture is sent');
+  if (!areaTerm.startsWith('Viscosity resists the relative motion') || !areaBody.includes('with 1 picture') || !pic || !pdfArea.capture?.send || pdfArea.locator?.page !== 2 || !pdfArea.locator.region) {
+    throw new Error(`pdf area: ${JSON.stringify({ areaTerm, areaBody: areaBody.slice(0, 200), pic, capture: pdfArea.capture, locator: pdfArea.locator })}`);
+  }
+  log('area on a PDF page: card with its text', JSON.stringify(areaTerm.slice(0, 50)), '+ picture', `${pdfArea.capture.w}×${pdfArea.capture.h}`, '; Quick ran with the picture');
+  await shoot('10-area-pdf');
+  await scrollTo('bottom');
+  await sleep(300);
+  await js(`${LAST}.querySelector('[data-testid=locate-term]').click()`);
+  const areaFound = await located();
+  if (!areaFound.hit || !areaFound.inView) throw new Error(`locate area: ${JSON.stringify(areaFound)}`);
+  log('the area card finds its place again from the last page');
+  await clearHighlight();
+  await js(`${LAST}.querySelector('.card-head button[title=Close]').click()`);
+  // Plain text (a code file): its text is enough, no picture is sent; started from the top-bar button.
+  await js(`[...document.querySelectorAll('.tab')].find((x) => x.title.endsWith('flow.py')).click()`);
+  await waitFor('code again', `!!document.querySelector('.reader.active .code-doc')`);
+  await scrollTo('top');
+  await sleep(150);
+  const codeCardsBefore = await js<number>(`${CARDS}.length`);
+  await js(`document.querySelector('[data-testid=capture-area]').click()`);
+  const l1 = await boxOf('.reader.active .code-doc', 'def drag');
+  const l2 = await boxOf('.reader.active .code-doc', 'kinematic viscosity.');
+  await dragArea({ x: l1.left - 6, y: l1.top - 3 }, { x: l2.right + 6, y: l2.bottom + 3 });
+  await newCardTerm(codeCardsBefore);
+  const codeBody = await (await net.fetch(await doneResult('quick-gloss'))).text();
+  await sleep(500);
+  const codeArea = savedCards('flow.py').at(-1)!;
+  if (!/^def drag\(rho, v, area, cd\): # Aerodynamic drag/.test(codeArea.term) || codeArea.capture?.send !== false || codeBody.includes('picture')) {
+    throw new Error(`code area: ${JSON.stringify({ term: codeArea.term, capture: codeArea.capture, codeBody: codeBody.slice(0, 160) })}`);
+  }
+  log('area on plain text: the lines it covers, sent as text only:', JSON.stringify(codeArea.context.sentence));
+  await js(`${LAST}.querySelector('.card-head button[title=Close]').click()`);
+  // Esc during a capture leaves nothing behind.
+  key('A', ['alt']);
+  await waitFor('capture overlay', `!!document.querySelector('[data-testid=area-capture]')`, 3000);
+  key('Escape');
+  await waitFor('capture cancelled', `!document.querySelector('[data-testid=area-capture]')`, 3000);
+  if ((await js<number>(`${CARDS}.length`)) !== codeCardsBefore) throw new Error('a cancelled capture made a card');
+  // Local HTML: the page or its source.
+  await js(`window.__glossaTest.openPath(${JSON.stringify(path.join(dir, 'page.html'))})`);
+  await waitFor('html page', `document.querySelector('.reader.active .html-doc')?.textContent.includes('Bernoulli')`);
+  await js(`document.querySelector('.reader.active [data-testid=html-source-toggle]').click()`);
+  await waitFor('html source', `document.querySelector('.reader.active .code-doc')?.textContent.includes('<title>Local page</title>')`);
+  await js(`document.querySelector('.reader.active [data-testid=html-source-toggle]').click()`);
+  await waitFor('html page again', `!!document.querySelector('.reader.active .html-doc')`);
+  log('local HTML shown as a page and as its source');
+  // Back to how the next steps expect it: Quick by click, nothing saved, the PDF shown.
+  for (const name of ['page.html', 'flow.py']) await js(`[...document.querySelectorAll('.tab')].find((x) => x.title.endsWith(${JSON.stringify(name)})).querySelector('button').click()`);
+  await toggleAutoQuick(false);
+  deps.store.setSettings({ outputDir: '' });
+  await js(`[...document.querySelectorAll('.tab')].find((x) => x.title.endsWith('sample.pdf')).click()`);
+  await waitFor('sample pdf again', `document.querySelector('.tab.on')?.title.endsWith('sample.pdf') && ${CARDS}.length > 0`);
 
   // --- a run still going when the app ends is interrupted, not resumed (checked on the next launch) ---
   process.env.GLOSSA_PI_DEMO_DELAY_MS = '600000';
@@ -430,8 +756,7 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
   // Machines that refuse loopback connections cannot serve the fixture page or the
   // test model endpoint; GLOSSA_SMOKE_NO_LOOPBACK=1 skips those steps and says so.
   const noLoopback = process.env.GLOSSA_SMOKE_NO_LOOPBACK === '1';
-  if (noLoopback) log('NOT RUN: web page, route change and web permission steps (GLOSSA_SMOKE_NO_LOOPBACK)');
-  else {
+  {
     // --- web page in <webview> ---------------------------------------------------
     await js(`window.__glossaTest.openUrl(${JSON.stringify(url)})`);
     const guest = await (async () => {
@@ -479,7 +804,7 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
     if (spaDoc.docId === oldDocId) throw new Error('route change kept the old document identity');
     const gp2 = await guest.executeJavaScript(textRect('body', 'microscopic'));
     await js(`document.querySelector('.reader.active webview').send('glossa:pickAt', ${JSON.stringify(gp2)})`);
-    await waitFor('card on new route', `${LAST}?.querySelector('.term-input')?.value === 'microscopic'`);
+    await waitFor('card on new route', `${LAST}?.dataset.term === 'microscopic'`);
     const ctx2 = await js<string>(`${LAST}.querySelector('.context-line')?.textContent ?? ''`);
     log('spa route: new document', spaDoc.docId.slice(0, 8), 'context:', ctx2.slice(0, 80));
     if (!ctx2.includes('macroscopic state')) throw new Error('stale context after route change');
@@ -498,6 +823,75 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
       throw new Error('web permissions not denied');
     }
     if (guest.session !== session.fromPartition(WEB_PARTITION)) throw new Error('webview is not in the locked-down partition');
+
+    // --- the pick hotkey while the app has the keyboard (a card took it), mouse over the page ---
+    // As on YouTube: the new card holds the keyboard; Alt+Q over the page used to do nothing.
+    await js(`${LAST}.focus()`);
+    if (!(await js<boolean>(`!!document.activeElement?.closest('[data-testid=term-card]')`))) throw new Error('card does not have the keyboard');
+    const gp3 = await guest.executeJavaScript(textRect('body', 'arrangements'));
+    guest.sendInputEvent({ type: 'mouseMove', x: gp3.x, y: gp3.y });
+    await sleep(300);
+    const webCards = await js<number>(`${CARDS}.length`);
+    key('Q', ['alt']);
+    for (let i = 0; i < 30 && !(await guest.executeJavaScript(`!!document.querySelector('[data-glossa-overlay]')`)); i++) await sleep(100);
+    if (!(await guest.executeJavaScript(`!!document.querySelector('[data-glossa-overlay]')`))) throw new Error('Alt+Q with the app holding the keyboard did not reach the page');
+    // The page took the keyboard: Enter confirms there.
+    guest.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
+    guest.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+    if ((await newCardTerm(webCards)) !== 'arrangements') throw new Error('forwarded pick gave the wrong term');
+    log('Alt+Q with the keyboard in a card: forwarded to the page under the mouse, card created');
+
+    // --- capturing an area of a web page: text alone; a picture with its picture ---------------
+    await guest.executeJavaScript(`(() => {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('width', '160'); svg.setAttribute('height', '90'); svg.id = 'fig';
+      svg.innerHTML = '<rect width="160" height="90" fill="#2a6"/><circle cx="80" cy="45" r="30" fill="#fd0"/>';
+      document.querySelector('main').append(svg);
+    })()`);
+    await sleep(200);
+    const wv = await js<{ left: number; top: number }>(`(() => { const r = document.querySelector('.reader.active webview').getBoundingClientRect(); return { left: r.left, top: r.top }; })()`);
+    const inGuest = (sel: string) => guest.executeJavaScript(`(() => { const b = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return { left: b.left, top: b.top, right: b.right, bottom: b.bottom }; })()`) as Promise<{ left: number; top: number; right: number; bottom: number }>;
+    const toHost = (b: { left: number; top: number; right: number; bottom: number }, pad: number) => [
+      { x: Math.round(wv.left + b.left - pad), y: Math.round(wv.top + b.top - pad) },
+      { x: Math.round(wv.left + b.right + pad), y: Math.round(wv.top + b.bottom + pad) },
+    ] as const;
+    // Started from the page: Alt+A while it has the keyboard is forwarded to the app.
+    guest.focus();
+    guest.sendInputEvent({ type: 'keyDown', keyCode: 'A', modifiers: ['alt'] });
+    guest.sendInputEvent({ type: 'keyUp', keyCode: 'A', modifiers: ['alt'] });
+    const [pa, pb] = toHost(await inGuest('p'), 3);
+    let before = await js<number>(`${CARDS}.length`);
+    await dragArea(pa, pb);
+    await newCardTerm(before);
+    await sleep(500);
+    const webDoc = deps.store.recentDocs().find((d) => d.source.endsWith('/glossa-spa-route'))!;
+    const textArea = deps.store.getDoc(webDoc.docId)!.termCards!.at(-1)!;
+    if (!textArea.term.startsWith('Entropy measures how many microscopic arrangements') || textArea.capture?.send !== false) throw new Error(`web text area: ${JSON.stringify(textArea)}`);
+    const [fa, fb] = toHost(await inGuest('#fig'), 2);
+    key('A', ['alt']);
+    before = await js<number>(`${CARDS}.length`);
+    await dragArea(fa, fb);
+    if ((await newCardTerm(before)) !== 'Picture') throw new Error('web picture area term');
+    await clickSkill('Quick');
+    const figBody = await (await net.fetch(await doneResult('quick-gloss'))).text();
+    await sleep(500);
+    const figArea = deps.store.getDoc(webDoc.docId)!.termCards!.at(-1)!;
+    if (!figBody.includes('with 1 picture') || !figArea.capture?.send || !figArea.locator?.region) throw new Error(`web picture area: ${JSON.stringify({ figBody: figBody.slice(0, 160), figArea })}`);
+    await shoot('10b-area-web');
+    // Found again on the page by where it was.
+    await guest.executeJavaScript(`(() => { const d = document.createElement('div'); d.style.height = '3000px'; document.body.append(d); scrollTo(0, 3000); })()`);
+    await sleep(200);
+    await js(`${LAST}.querySelector('[data-testid=locate-term]').click()`);
+    let webLocated = false;
+    for (let i = 0; i < 40 && !webLocated; i++) {
+      webLocated = await guest.executeJavaScript(`(() => { const o = document.querySelector('[data-glossa-locate] div'); if (!o) return false; const h = o.getBoundingClientRect(); return h.top >= 0 && h.bottom <= innerHeight; })()`);
+      if (!webLocated) await sleep(100);
+    }
+    if (!webLocated) {
+      const why = await js<string>(`document.querySelector('.error-bar')?.textContent ?? '(no error shown)'`);
+      throw new Error(`web picture area not found again: ${why} | locator ${JSON.stringify(figArea.locator)} | scrollY ${await guest.executeJavaScript('scrollY')}`);
+    }
+    log('web page areas: text alone (no picture sent), a figure with its picture; found again after scrolling away');
   }
 
   // --- IPC: runtime validation and the agent gate, through the real bridge -------
@@ -510,10 +904,11 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
     r.agentNoOrigin = await err(window.glossa.jobs.start(req));
     r.agentAuto = await err(window.glossa.jobs.start({ ...req, origin: 'auto' }));
     r.cards = await err(window.glossa.docs.saveCards('${rec.docId}', [{ id: 'x' }]));
+    r.outputDir = await err(window.glossa.settings.set({ outputDir: '/tmp/not-chosen-in-a-dialog' }));
     return r;
   })()`);
   log('ipc checks', JSON.stringify(ipc));
-  if (!/Invalid job id/.test(ipc.badId) || !/unexpected field agentTrust/.test(ipc.trust) || !/explicit click/.test(ipc.agentNoOrigin) || !/explicit click/.test(ipc.agentAuto) || !/Invalid/.test(ipc.cards)) {
+  if (!/Invalid job id/.test(ipc.badId) || !/unexpected field agentTrust/.test(ipc.trust) || !/explicit click/.test(ipc.agentNoOrigin) || !/explicit click/.test(ipc.agentAuto) || !/Invalid/.test(ipc.cards) || !/Choose/.test(ipc.outputDir)) {
     throw new Error('IPC checks failed');
   }
   fs.writeFileSync(stateFile, JSON.stringify({ docId: rec.docId, eli5: saved[0].tasks[1].jobId, agent: agentCard.jobId, long: longJob }));
@@ -544,15 +939,19 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
   const errBar = await js<string>(`document.querySelector('.error-bar')?.textContent ?? ''`);
   if (errBar) throw new Error(`settings UI error: ${errBar}`);
   log('settings UI change stored through validated IPC');
+  await shoot('6-settings-general');
   if (noLoopback) log('NOT RUN: model connection steps (GLOSSA_SMOKE_NO_LOOPBACK)');
   else await runConnectionSmoke(win, deps.store, shoot);
   for (const [i, name] of [[1, 'providers'], [2, 'models'], [3, 'harnesses'], [4, 'skills']] as const) {
     await js(`document.querySelectorAll('.settings-nav button')[${i}].click()`);
     await shoot(`6-settings-${name}`);
   }
+  // A skill's own engine and output folder.
+  await js(`document.querySelector('.skills-table tr button[title="Engine for this skill"]').click()`);
+  await waitFor('skill output folder', `!!document.querySelector('[data-testid=skill-output-quick-gloss]')`);
+  await shoot('6-settings-skill-engine');
   await js(`document.querySelector('.modal-head button').click()`);
 
-  server.close();
   log('ALL PASSED');
   return 0;
 }

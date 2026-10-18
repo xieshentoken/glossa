@@ -66,16 +66,23 @@ export function useTermCards(opts: {
         window: 'normal',
         tasks: [],
         createdAt: Date.now(),
+        ...(picked.locator ? { locator: picked.locator } : {}),
+        ...(picked.capture ? { capture: picked.capture } : {}),
       };
       setDoc(docId, (l) => [...l, card]);
       setFocused(card.id);
+      return card;
     },
     [setDoc],
   );
 
+  /**
+   * Starts a skill on a card. 'auto' is the quick explanation of a card just created
+   * (passed as `fresh`, since it is not in the state yet); everything else is a click.
+   */
   const run = useCallback(
-    async (docId: string, id: string, skill: SkillInfo, o: RunOptions) => {
-      const card = ref.current.byDoc[docId]?.find((c) => c.id === id);
+    async (docId: string, id: string, skill: SkillInfo, o: RunOptions, origin: 'user' | 'auto' = 'user', fresh?: TermCard) => {
+      const card = ref.current.byDoc[docId]?.find((c) => c.id === id) ?? (fresh?.id === id ? fresh : undefined);
       if (!card) return;
       const engine = { model: o.model, effort: o.effort };
       const request: JobRequest = {
@@ -83,7 +90,8 @@ export function useTermCards(opts: {
         skill: skill.name,
         context: { ...card.context, term: card.term.trim() || card.context.term },
         explainLang: card.explainLang,
-        origin: 'user',
+        ...(card.capture?.send ? { image: card.capture.id } : {}),
+        origin,
         ...(skill.runner === 'direct' ? { direct: engine } : { agent: engine }),
       };
       const key = runKey(request);

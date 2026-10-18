@@ -24,6 +24,8 @@ export interface AgentRunOptions {
   ctx: TermContext;
   explainLang: string;
   profile?: string;
+  /** A captured area's picture, written next to context.md. */
+  picture?: { name: string; data: Buffer };
   apiKey?: string;
   signal: AbortSignal;
   onProgress: (line: string) => void;
@@ -47,7 +49,7 @@ export function harnessArgv(o: Pick<AgentRunOptions, 'harness' | 'engine' | 'wor
   });
 }
 
-export function prepareWorkspace(o: Pick<AgentRunOptions, 'workspace' | 'skill' | 'harness' | 'ctx' | 'explainLang' | 'profile'>): string[] {
+export function prepareWorkspace(o: Pick<AgentRunOptions, 'workspace' | 'skill' | 'harness' | 'ctx' | 'explainLang' | 'profile' | 'picture'>): string[] {
   fs.mkdirSync(path.join(o.workspace, 'output'), { recursive: true });
   fs.mkdirSync(path.join(o.workspace, '.tmp'), { recursive: true });
   const dirs: string[] = [];
@@ -56,7 +58,8 @@ export function prepareWorkspace(o: Pick<AgentRunOptions, 'workspace' | 'skill' 
     copyTreeSafe(o.skill.dir, dest);
     dirs.push(dest);
   }
-  fs.writeFileSync(path.join(o.workspace, 'context.md'), contextFile(o.ctx, o.explainLang, o.profile));
+  if (o.picture) writeFileAtomic(path.join(o.workspace, o.picture.name), o.picture.data);
+  fs.writeFileSync(path.join(o.workspace, 'context.md'), contextFile(o.ctx, o.explainLang, o.profile, o.picture?.name));
   return dirs;
 }
 

@@ -18,6 +18,7 @@ export function TaskPanel(props: {
   skillLabel: (name: string) => string;
   t: T;
   onStop: (jobId: string) => void;
+  onStopAll: () => void;
   onOpen: (jobId: string) => void;
   onClose: () => void;
 }) {
@@ -45,6 +46,12 @@ export function TaskPanel(props: {
     <div className="task-panel card" data-testid="tasks-panel" onKeyDown={(e) => e.key === 'Escape' && props.onClose()}>
       <div className="card-head">
         <strong className="pill-text">{t('tasks')}</strong>
+        {active.length > 0 && (
+          <button className="danger stop-all" onClick={props.onStopAll} data-testid="stop-all">
+            <Icon name="stop" size={15} />
+            {t('stopAll')}
+          </button>
+        )}
         <button className="icon" title={t('close')} aria-label={t('close')} onClick={props.onClose}>
           <Icon name="close" />
         </button>

@@ -7,6 +7,7 @@ import { buildAgentEnv, redactor, secretValues } from '../src/main/agent-env';
 import { dangerousFlag } from '../src/main/agent-policy';
 import { detectIsolation } from '../src/main/isolation';
 import { vJobRequest } from '../src/main/validate';
+import { defaultSettings, mergeSettings } from '../src/shared/defaults';
 import { fakeAgentCommand, req, settle, setup, tmpDir } from './helpers';
 
 let dir: string;
@@ -140,7 +141,7 @@ describe('environment', () => {
     process.env.FAKE_AGENT_DUMP_ENV = '1';
     const h = setup(dir);
     h.store.setSettings({ harnesses: [{ ...h.store.getSettings().harnesses[0], keyFromProvider: 'anthropic', keyEnv: 'ANTHROPIC_API_KEY' }] });
-    h.store.setKey('anthropic', 'sk-synthetic-key-123456');
+    h.store.setKey('anthropic', 'sk-synthetic-test-only-00000000000000000000');
     const j = await settle(h.jobs, (await h.jobs.start(req('fake-figure'))).id);
     expect(j.status).toBe('done');
     const work = path.join(h.jobs.jobDir(j.id), 'work');
@@ -149,10 +150,10 @@ describe('environment', () => {
     expect(env.GLOSSA_SYNTHETIC_OTHER).toBeUndefined();
     expect(env.PATH).toBeDefined();
     expect(env.TMPDIR).toBe(path.join(work, '.tmp'));
-    expect(env.ANTHROPIC_API_KEY).toBe('sk-synthetic-key-123456');
+    expect(env.ANTHROPIC_API_KEY).toBe('sk-synthetic-test-only-00000000000000000000');
     const log = fs.readFileSync(path.join(h.jobs.jobDir(j.id), 'harness.log'), 'utf8');
     expect(log).toContain('using key [redacted]');
-    expect(log).not.toContain('sk-synthetic-key-123456');
+    expect(log).not.toContain('sk-synthetic-test-only-00000000000000000000');
   });
 
   it('builds the allow-list per platform and redacts proxy credentials', () => {
@@ -188,5 +189,29 @@ describe('cancel', () => {
     delete process.env.FAKE_AGENT_MODE;
     const next = await h.jobs.start(req('fake-figure', { force: true }));
     expect((await settle(h.jobs, next.id)).status).toBe('done');
+  });
+});
+
+describe('one engine for every skill', () => {
+  it('built-in Anatomy runs on the built-in Pi agent with the skill-answer connection, whatever the old agent settings say', async () => {
+    const seen: { model: unknown; label?: string }[] = [];
+    let cli = 0;
+    const h = setup(dir, {}, {
+      agentRunner: async () => (cli++, { output: 'html' as const }),
+      piRunner: async (o) => (seen.push({ model: o.task.model }), { text: '', stop: 'error', error: 'stub' }),
+    });
+    // Leftovers of the Claude Code era: a CLI as the agent default and a Claude model for it.
+    h.store.setSettings({ defaults: { ...h.store.getSettings().defaults, agent: { harnessId: 'fake', model: 'claude-opus-5-5', effort: 'max', budgetUsd: 2, timeoutMinutes: 5 } } });
+    const j = await settle(h.jobs, (await h.jobs.start(req('anatomy'))).id);
+    expect(cli).toBe(0);
+    expect(j.engineLabel).toBe('Pi · Offline demo (no AI) · fake · high');
+    expect(seen[0].model).toMatchObject({ demo: true, id: 'fake' });
+    expect(h.approvals).toHaveLength(0); // built in: no dialog
+  });
+
+  it('v4 → v5: the separate workspace engine is cleared; limits stay', () => {
+    const m = mergeSettings({ settingsVersion: 4, defaults: { ...defaultSettings().defaults, agent: { harnessId: 'codex', providerId: 'x', model: 'claude-opus-5-5', effort: 'max', budgetUsd: 3, timeoutMinutes: 30 } } });
+    expect(m.defaults.agent).toEqual({ harnessId: 'pi', providerId: '', model: '', effort: 'default', budgetUsd: 3, timeoutMinutes: 30 });
+    expect(m.settingsVersion).toBe(5);
   });
 });

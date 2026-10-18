@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { app, BrowserWindow, nativeTheme, protocol, safeStorage, session, utilityProcess } from 'electron';
 import { IPC } from '../shared/api';
-import { cardJobIds } from '../shared/cards';
+import { cardJobIds, cardPictureIds } from '../shared/cards';
 import { UI_LANGS, type Settings, type Theme, type UiLang } from '../shared/types';
 import { agentApprovalDialog, grantDialog } from './dialogs';
 import { DocumentService } from './documents';
@@ -142,6 +142,9 @@ function cleanUp(): void {
     }
     cleanJobs({ jobsDir: store.jobsDir, keep, maxAgeDays: 60, maxUnreferenced: 300 });
     jobs.cache.prune((id) => fs.existsSync(path.join(store.jobsDir, id)));
+    const pictures = new Set<string>();
+    for (const d of store.recentDocs(10_000)) for (const id of cardPictureIds(store.getDoc(d.docId))) pictures.add(id);
+    store.captures.prune(pictures);
   } catch (err) {
     console.warn('Cleanup skipped:', (err as Error).message);
   }
@@ -166,6 +169,16 @@ async function createWindow(): Promise<void> {
     },
   });
   win.on('closed', () => (win = null));
+  // Zoom belongs to the reading panels: the window itself never pinch-zooms, and the
+  // zoom shortcuts (which the default menu would apply to the whole window) go to the active panel.
+  void win.webContents.setVisualZoomLevelLimits(1, 1);
+  win.webContents.on('before-input-event', (e, input) => {
+    if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
+    const dir = input.key === '=' || input.key === '+' ? 'in' : input.key === '-' || input.key === '_' ? 'out' : input.key === '0' ? 'reset' : null;
+    if (!dir) return;
+    e.preventDefault();
+    sendToRenderer(IPC.appZoomKey, dir);
+  });
   await win.loadURL('glossa://app/index.html');
   if (process.env.GLOSSA_SMOKE) {
     const { runSmoke } = await import('./smoke');
