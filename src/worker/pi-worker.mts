@@ -66,6 +66,10 @@ export interface PiRunResult {
   stop: 'complete' | 'length' | 'error' | 'aborted';
   error?: string;
   costUsd?: number;
+  /** Tokens the model reported for the whole run (input, output and cache). */
+  tokens?: number;
+  /** The model's price is known, so costUsd counts (0 can then mean "free"). */
+  priced?: boolean;
 }
 
 export type ToWorker = { type: 'run'; task: PiTask } | { type: 'abort' };
@@ -195,7 +199,9 @@ async function run(task: PiTask, port: Port, abort: { current?: () => void }): P
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, enableInstallTelemetry: false, retry: { enabled: true, maxRetries: 2 } }),
   });
   let cost = 0;
+  let tokens = 0;
   let overBudget = false;
+  const priced = model.cost.input > 0 || model.cost.output > 0;
   let last: AssistantMessage | undefined;
   abort.current = () => void session.abort();
   session.subscribe((e) => {
@@ -204,6 +210,7 @@ async function run(task: PiTask, port: Port, abort: { current?: () => void }): P
     else if (e.type === 'message_end' && e.message.role === 'assistant') {
       last = e.message;
       cost += e.message.usage?.cost?.total ?? 0;
+      tokens += e.message.usage?.totalTokens ?? 0;
       if (task.budgetUsd > 0 && cost > task.budgetUsd && !overBudget) {
         overBudget = true;
         void session.abort();
@@ -218,18 +225,19 @@ async function run(task: PiTask, port: Port, abort: { current?: () => void }): P
     session.dispose();
   }
   const costUsd = cost > 0 ? cost : undefined;
-  if (overBudget) return { text: last ? textOf(last) : '', stop: 'error', error: `Stopped: the budget of $${task.budgetUsd} was reached.`, costUsd };
-  if (!last) return { text: '', stop: 'error', error: 'Pi returned no answer.', costUsd };
+  const used = { tokens: tokens || undefined, priced };
+  if (overBudget) return { text: last ? textOf(last) : '', stop: 'error', error: `Stopped: the budget of $${task.budgetUsd} was reached.`, costUsd, ...used };
+  if (!last) return { text: '', stop: 'error', error: 'Pi returned no answer.', costUsd, ...used };
   const text = textOf(last);
   switch (last.stopReason) {
     case 'stop':
-      return { text, stop: 'complete', costUsd };
+      return { text, stop: 'complete', costUsd, ...used };
     case 'length':
-      return { text, stop: 'length', costUsd };
+      return { text, stop: 'length', costUsd, ...used };
     case 'aborted':
-      return { text, stop: 'aborted', costUsd };
+      return { text, stop: 'aborted', costUsd, ...used };
     default:
-      return { text, stop: 'error', error: last.errorMessage || `Pi stopped (${last.stopReason}).`, costUsd };
+      return { text, stop: 'error', error: last.errorMessage || `Pi stopped (${last.stopReason}).`, costUsd, ...used };
   }
 }
 

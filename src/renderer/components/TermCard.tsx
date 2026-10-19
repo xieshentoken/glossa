@@ -8,12 +8,13 @@ import { selectedDirect } from '../../shared/engine-selection';
 import type { T } from '../../shared/i18n';
 import { modelInfo } from '../../shared/model-catalog';
 import { skillLabel } from '../../shared/skills';
-import type { CardTask, Effort, JobState, JobStatus, Rect, Settings, SkillInfo, TermCard as Card, Theme } from '../../shared/types';
+import type { CardTask, Effort, JobState, JobStatus, Rect, Settings, SkillInfo, TermCard as Card, ViewTheme } from '../../shared/types';
 import { useDragRect } from '../lib/drag';
 import { langName } from '../lib/lang';
 import type { RunOptions } from '../lib/useTermCards';
 import { Icon } from './Icon';
 import { MiniMarkdown } from './MiniMarkdown';
+import { RunProgress } from './RunProgress';
 import { htmlAnswer, htmlAnswerParts } from '../../shared/html-answer';
 import { api } from '../api';
 
@@ -30,7 +31,7 @@ export function TermCard(props: {
   skills: SkillInfo[];
   settings: Settings;
   /** The theme shown, for result pages. */
-  theme: Theme;
+  theme: ViewTheme;
   t: T;
   focused: boolean;
   zIndex: number;
@@ -292,7 +293,7 @@ export function StatusIcon({ status, small }: { status: JobStatus; small?: boole
   return <span className={`status-icon s-${status} ${small ? 'small' : ''} ${status === 'running' ? 'spin' : ''}`}>{glyph}</span>;
 }
 
-function TaskView(props: { task: CardTask; job?: JobState; theme: Theme; t: T; onRerun: () => void; onCancel: () => void }) {
+function TaskView(props: { task: CardTask; job?: JobState; theme: ViewTheme; t: T; onRerun: () => void; onCancel: () => void }) {
   const { job, t } = props;
   const status = job?.status ?? 'queued';
   const [now, setNow] = useState(Date.now());
@@ -321,6 +322,7 @@ function TaskView(props: { task: CardTask; job?: JobState; theme: Theme; t: T; o
 
   return (
     <div className={`task-view s-${status}`} data-testid="task-view" data-status={status} data-skill={props.task.skill} data-job={props.task.jobId}>
+      <RunProgress job={job} t={t} />
       <div className="task-status">
         <StatusIcon status={status} />
         <div className="pill-text">
@@ -334,6 +336,7 @@ function TaskView(props: { task: CardTask; job?: JobState; theme: Theme; t: T; o
               {t('savedTo')}: {job.savedTo.split(/[\\/]/).slice(-2).join('/')}
             </button>
           )}
+          {job?.usageNote && <div className="pill-sub usage-note" data-testid="usage-note">{job.usageNote}</div>}
           {viewable && job?.saveError && <div className="pill-sub error-text" title={job.saveError}>{t('notSaved')}</div>}
         </div>
         {viewable && (

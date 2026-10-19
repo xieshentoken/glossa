@@ -1,7 +1,7 @@
 // Builds main + preloads with esbuild and the renderer with Vite.
 // Usage: node scripts/build.mjs [--dev]   (--dev: no minify, keep sourcemaps)
 
-import { cpSync, mkdirSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build as esbuild } from 'esbuild';
@@ -40,5 +40,11 @@ const pdfjs = path.join(root, 'node_modules', 'pdfjs-dist');
 const dest = path.join(out, 'renderer', 'pdfjs');
 mkdirSync(dest, { recursive: true });
 for (const dir of ['cmaps', 'standard_fonts', 'wasm']) cpSync(path.join(pdfjs, dir), path.join(dest, dir), { recursive: true });
+
+// KaTeX for formulas in result pages: its stylesheet and the font files it names first (woff2).
+const katex = path.join(root, 'node_modules', 'katex', 'dist');
+mkdirSync(path.join(out, 'katex', 'fonts'), { recursive: true });
+cpSync(path.join(katex, 'katex.min.css'), path.join(out, 'katex', 'katex.min.css'));
+for (const f of readdirSync(path.join(katex, 'fonts'))) if (f.endsWith('.woff2')) cpSync(path.join(katex, 'fonts', f), path.join(out, 'katex', 'fonts', f));
 
 console.log(`Built ${dev ? '(dev)' : ''} → dist/`);

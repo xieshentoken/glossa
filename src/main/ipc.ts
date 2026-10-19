@@ -172,6 +172,10 @@ export function registerIpc(d: IpcDeps): void {
     const size = img.getSize();
     return { id: store.captures.save(img.toPNG()), w: size.width, h: size.height };
   });
+  handle(IPC.usageStatus, () => {
+    const s = store.getSettings();
+    return s.providers.map((p) => store.usage.status(s, p.id));
+  });
   handle(IPC.capturePicture, (id) => store.captures.dataUrl(vCaptureId(id)));
   handle(IPC.docsSetText, (id, text, title) => {
     const docId = vDocId(id);

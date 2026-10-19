@@ -97,8 +97,8 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
     })()`);
   const close1 = (a: number, b: number) => Math.abs(a - b) <= 1;
   /** Drags a card by its title bar with real mouse events. */
-  const dragCard = async (card: string, dx: number, dy: number) => {
-    const p = await js<{ x: number; y: number }>(`(() => { const h = (${card}).querySelector('.card-head').getBoundingClientRect(); return { x: Math.round(h.left + 5), y: Math.round(h.top + h.height / 2) }; })()`);
+  const dragCard = async (card: string, dx: number, dy: number, handle = '.card-head') => {
+    const p = await js<{ x: number; y: number }>(`(() => { const h = (${card}).querySelector('${handle}').getBoundingClientRect(); return { x: Math.round(h.left + Math.min(5, h.width / 2)), y: Math.round(h.top + h.height / 2) }; })()`);
     wc.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y });
     wc.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 });
     for (let i = 1; i <= 6; i++) {
@@ -252,6 +252,8 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
   log('agent card:', agentJob);
 
   // --- a third card; the earlier ones keep their own terms -------------------------
+  // The second card is moved off the heading first, as a reader would.
+  await dragCard(LAST, 400, 300);
   await pickWithMouse('.reader.active .html-doc', 'basics');
   key('Return');
   const term3card = await newCardTerm(1);
@@ -308,6 +310,19 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
   await pickWithMouse('.reader.active .textLayer', 'Laminar');
   key('Return');
   if ((await newCardTerm(1)) !== 'Laminar') throw new Error('second pdf card');
+  // The reader sizes cards freely (resize handle, real mouse); the size they chose stays when another skill runs.
+  const original = await box(`${CARDS}[0]`);
+  for (const c of [`${CARDS}[0]`, LAST]) {
+    const b = await box(c);
+    await dragCard(c, -60, 240 - b.h, '.resize-handle');
+  }
+  const chosen = await box(`${CARDS}[0]`);
+  if (chosen.h !== 240 || chosen.w !== original.w - 60) throw new Error(`resize: ${JSON.stringify({ original, chosen })}`);
+  await clickSkill('Quick', `${CARDS}[0]`);
+  await doneResult('quick-gloss', `${CARDS}[0]`);
+  const afterRun = await box(`${CARDS}[0]`);
+  if (afterRun.w !== chosen.w || afterRun.h !== chosen.h) throw new Error(`running a skill resized the card: ${JSON.stringify({ chosen, afterRun })}`);
+  log('cards resized by hand to', `${chosen.w}×${chosen.h}`, 'keep that size when a skill runs');
   const p1 = await box(`${CARDS}[0]`);
   let p2 = await box(LAST);
   // Dropped 10px below the first card and 6px to the right: snaps under it with the gap, edges lined up.
@@ -400,19 +415,37 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
   process.env.GLOSSA_PI_DEMO_DELAY_MS = '3000';
   deps.store.setSettings({ skillOverrides: { anatomy: { agent: { harnessId: 'pi', providerId: 'demo' } } } });
   const qCard = LAST; // the Laminar card
+  const sizeBefore = await box(qCard);
   for (const name of ['Quick', 'ELI5', 'Anatomy']) if (!(await clickSkill(name, qCard))) throw new Error(`no ${name} button`);
   const tabStates = `[...${qCard}.querySelectorAll('.skills-row .chip-status')].map((x) => [...x.classList].find((c) => c.startsWith('s-'))).join()`;
   await waitFor('two running, one waiting', `${tabStates} === 's-running,s-running,s-queued'`, 8000).catch(async (e: Error) => {
     throw new Error(`${e.message}: ${await js<string>(tabStates)}`);
   });
+  // The waiting run's bar shows "not started" (the card shows its last-clicked run, Anatomy).
+  await waitFor('waiting bar', `!!${qCard}.querySelector('[data-testid=task-view][data-skill=anatomy] [data-testid=run-progress].waiting')`, 4000);
   await shoot('5a-queue');
   // Stop one from the task panel: the others go on and the waiting one starts.
   await js(`document.querySelector('[data-testid=tasks-button]').click()`);
   await waitFor('task panel', `document.querySelectorAll('[data-testid=task-row][data-status=running]').length === 2`);
   await js(`[...document.querySelectorAll('[data-testid=task-row]')].find((r) => r.textContent.includes('Laminar') && r.textContent.includes('Quick')).querySelector('button[title=Stop]').click()`);
   await waitFor('queue moved on', `${tabStates} === 's-cancelled,s-running,s-running'`, 8000);
+  // Running now: the bar grows (an estimate; it never fills by itself).
+  const bar = `Number(${qCard}.querySelector('[data-testid=task-view][data-skill=anatomy] [data-testid=run-progress]')?.dataset.progress || 0)`;
+  const b1 = await waitFor<number>('running bar', bar, 4000);
+  await sleep(1200);
+  const b2 = await js<number>(bar);
+  if (!(b1 > 0 && b2 > b1 && b2 < 0.9)) throw new Error(`progress bar: ${b1} → ${b2}`);
+  log('progress bar: waiting segment in the queue, then growing', b1.toFixed(3), '→', b2.toFixed(3));
   await shoot('5b-task-panel');
   log('queue: two running, third waiting; stopping one from the task panel started the third');
+  // Switching between skills (Markdown and HTML results) never resizes the card.
+  for (const name of ['Quick', 'ELI5', 'Anatomy']) {
+    await clickSkill(name, qCard);
+    await sleep(150);
+    const b = await box(qCard);
+    if (b.w !== sizeBefore.w || b.h !== sizeBefore.h) throw new Error(`card resized by ${name}: ${JSON.stringify({ sizeBefore, b })}`);
+  }
+  log('card size stays', `${sizeBefore.w}×${sizeBefore.h}`, 'across Quick, ELI5 and Anatomy');
   // Close the card while two runs are going: they finish anyway.
   await js(`${qCard}.querySelector('.card-head button[title=Close]').click()`);
   await waitFor('card closed', `${CARDS}.length === 1`);
@@ -750,6 +783,10 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
   await clickSkill('ELI5', `${CARDS}[0]`);
   await waitFor('long run started', `${CARDS}[0].querySelector('[data-testid=task-view][data-skill=eli5][data-status=running]')`, 8000);
   const longJob = await js<string>(`${CARDS}[0].querySelector('[data-testid=task-view][data-skill=eli5]').dataset.job`);
+  // Before the first words, a short answer's bar stays under half.
+  const thinking = await waitFor<number>('long run bar', `Number(${CARDS}[0].querySelector('[data-testid=task-view][data-skill=eli5] [data-testid=run-progress]')?.dataset.progress || 0)`, 4000);
+  if (!(thinking > 0 && thinking < 0.5)) throw new Error(`thinking bar at ${thinking}`);
+  await shoot('5d-progress');
   delete process.env.GLOSSA_PI_DEMO_DELAY_MS;
   deps.store.setSettings({ skillOverrides: {} });
 
@@ -894,6 +931,18 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
     log('web page areas: text alone (no picture sent), a figure with its picture; found again after scrolling away');
   }
 
+  // --- a connection's usage limit: reached, nothing new starts on it --------------------
+  deps.store.usage.record('demo', { tokens: 50, priced: false });
+  deps.store.setSettings({ usageLimits: { demo: { period: 'day', usd: 0, tokens: 10 } } });
+  const limitedCards = await js<number>(`${CARDS}.length`);
+  await js(`document.querySelector('[data-testid=error-bar]')?.remove()`);
+  await clickSkill('ELI5');
+  const limitMsg = await waitFor<string>('usage limit message', `document.querySelector('.error-bar')?.textContent`, 5000);
+  if (!/reached its usage limit for this day/.test(limitMsg) || (await js<number>(`${CARDS}.length`)) !== limitedCards) throw new Error(`usage limit: ${limitMsg}`);
+  deps.store.setSettings({ usageLimits: {} });
+  await js(`document.querySelector('.error-bar button')?.click()`);
+  log('usage limit reached: the run was refused with', JSON.stringify(limitMsg.slice(0, 90)));
+
   // --- IPC: runtime validation and the agent gate, through the real bridge -------
   const ipc = await js<Record<string, string>>(`(async () => {
     const r = {};
@@ -915,17 +964,48 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
 
   // --- theme: the top-bar toggle cycles System → Light → Dark and the page follows at once ---
   const themeSeen: string[] = [];
-  const BG = { light: 'rgb(245, 245, 247)', dark: 'rgb(20, 21, 24)' };
-  for (let i = 0; i < 3; i++) {
+  const BG = { light: 'rgb(245, 245, 247)', dark: 'rgb(20, 21, 24)', paper: 'rgb(236, 229, 216)' };
+  for (let i = 0; i < 4; i++) {
     await js(`document.querySelector('[data-testid=theme-toggle]').click()`);
     await sleep(400);
     const pref = deps.store.getSettings().theme;
     const shown = await js<string>(`matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'`);
     const bg = await js<string>(`getComputedStyle(document.body).backgroundColor`);
     themeSeen.push(`${pref}→${shown}`);
-    if ((pref !== 'system' && shown !== pref) || bg !== BG[shown as 'light' | 'dark']) throw new Error(`theme ${pref}: shown ${shown}, background ${bg}`);
+    // Paper is light underneath (dialogs, scrollbars), with its own colours on top.
+    const expected = pref === 'paper' ? BG.paper : BG[shown as 'light' | 'dark'];
+    if ((pref === 'paper' ? shown !== 'light' : pref !== 'system' && shown !== pref) || bg !== expected) throw new Error(`theme ${pref}: shown ${shown}, background ${bg}`);
+    if (pref === 'paper') await paperChecks();
   }
-  if (new Set(themeSeen.map((x) => x.split('→')[0])).size !== 3) throw new Error(`theme toggle did not cycle: ${themeSeen.join(', ')}`);
+  if (new Set(themeSeen.map((x) => x.split('→')[0])).size !== 4) throw new Error(`theme toggle did not cycle: ${themeSeen.join(', ')}`);
+
+  /** In the paper theme: cards and their answers on paper, formulas rendered with KaTeX's own fonts. */
+  async function paperChecks() {
+    const card = `[...document.querySelectorAll('.card-layer [data-testid=term-card]')].find((c) => c.querySelector('[data-testid=task-view][data-status=done] iframe'))`;
+    const jobId = await waitFor<string>('a card with a finished answer', `${card}?.querySelector('[data-testid=task-view]').dataset.job`);
+    // This test's own result file gets a formula (the offline model writes none).
+    fs.writeFileSync(deps.jobs.outputFile(jobId)!, 'The **Reynolds number** compares inertia and viscosity:\n\n$$Re = \\frac{\\rho\\, v\\, L}{\\mu}$$\n\nTurbulence usually starts above $Re \\approx 2300$ in a pipe; prices like $5 and $10 stay text.\n');
+    const src = await js<string>(`(() => { const f = ${card}.querySelector('iframe'); f.src = f.src.replace(/&r=\\d+$/, '') + '&r=' + Date.now(); return f.src; })()`);
+    if (!src.includes('theme=paper')) throw new Error(`card answer not on paper: ${src}`);
+    const page = await (await net.fetch(src)).text();
+    const katexCss = await net.fetch(new URL('_katex/katex.min.css', src).toString());
+    const cssText = await katexCss.text();
+    const fontFile = /url\((fonts\/KaTeX_Main-Regular\.woff2)\)/.exec(cssText)?.[1];
+    const font = fontFile ? await net.fetch(new URL(`_katex/${fontFile}`, src).toString()) : undefined;
+    if (!/class="katex-display"/.test(page) || (page.match(/class="katex"/g) ?? []).length < 2 || page.includes('$5') === false || !page.includes('#fbf8f1') || katexCss.status !== 200 || font?.status !== 200) {
+      throw new Error(`formulas: display ${/katex-display/.test(page)}, css ${katexCss.status}, font ${font?.status}`);
+    }
+    const look = await js<{ card: string; title: string }>(`(() => { const c = ${card}; return { card: getComputedStyle(c).backgroundColor, title: getComputedStyle(c.querySelector('.term-title')).fontFamily }; })()`);
+    if (look.card !== 'rgb(251, 248, 241)' || !/Iowan|Palatino|Georgia|serif/.test(look.title)) throw new Error(`paper card look: ${JSON.stringify(look)}`);
+    await sleep(600);
+    await shoot('11-paper-formula');
+    await js(`document.querySelector('.topbar button.icon[title=Settings]').click()`);
+    await waitFor('settings', `!!document.querySelector('.modal.settings')`);
+    await sleep(300);
+    await shoot('11b-paper-settings');
+    await js(`document.querySelector('.modal-head button').click()`);
+    log('paper theme: cards on paper, answer rendered on paper with 2 formulas (KaTeX css and fonts served by the app), prices left as text');
+  }
   log('theme toggle:', themeSeen.join(', '));
 
   // --- settings window ----------------------------------------------------------
@@ -945,6 +1025,7 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
   for (const [i, name] of [[1, 'providers'], [2, 'models'], [3, 'harnesses'], [4, 'skills']] as const) {
     await js(`document.querySelectorAll('.settings-nav button')[${i}].click()`);
     await shoot(`6-settings-${name}`);
+    if (name === 'models' && !(await js<boolean>(`!!document.querySelector('[data-testid=usage-limits] tr[data-provider=anthropic] [data-testid=limit-usd-anthropic]')`))) throw new Error('usage limits table missing');
   }
   // A skill's own engine and output folder.
   await js(`document.querySelector('.skills-table tr button[title="Engine for this skill"]').click()`);

@@ -2,7 +2,7 @@
 
 import type { ParsedSkill } from './skills';
 import type { ConnectionsApi } from './connections';
-import type { CardCapture, DocInfo, DocRecord, JobRequest, JobState, OutputKind, Settings, SkillInfo, TermCard } from './types';
+import type { UsageStatus, CardCapture, DocInfo, DocRecord, JobRequest, JobState, OutputKind, Settings, SkillInfo, TermCard } from './types';
 
 export type LoadedDoc =
   | { kind: 'pdf'; data: Uint8Array }
@@ -62,6 +62,10 @@ export interface GlossaApi {
     importFolder(): Promise<SkillInfo[] | null>;
     installKnown(name: string): Promise<SkillInfo[]>;
   };
+  usage: {
+    /** What each connection used in its current period, with its limit. */
+    status(): Promise<UsageStatus[]>;
+  };
   capture: {
     /** Takes a picture of this rectangle of the window (CSS pixels): the area the reader dragged over. */
     area(rect: { x: number; y: number; width: number; height: number }): Promise<Omit<CardCapture, 'send'>>;
@@ -119,6 +123,7 @@ export const IPC = {
   harnessProbe: 'agent:probe',
   docsClose: 'docs:close',
   captureArea: 'capture:area',
+  usageStatus: 'usage:status',
   capturePicture: 'capture:picture',
   skillsList: 'skills:list',
   skillsRead: 'skills:read',

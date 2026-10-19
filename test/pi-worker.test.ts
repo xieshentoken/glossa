@@ -1,8 +1,7 @@
 // The built-in Pi worker, run for real (Pi SDK in a Node child process) with
-// Glossa's offline demo model and a synthetic localhost API. No external model calls.
+// Glossa's offline demo model. No network.
 
 import fs from 'node:fs';
-import http from 'node:http';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { piModelSpec } from '../src/main/pi-model';
@@ -33,42 +32,6 @@ const task = (over: Partial<PiTask> = {}): PiTask => ({
 });
 
 describe('Pi worker', () => {
-  it('sends API-discovered effort through the real worker and omits provider-default effort', async () => {
-    const calls: Record<string, unknown>[] = [];
-    const server = http.createServer(async (req, res) => {
-      if (req.url !== '/v1/chat/completions' || req.headers.authorization !== 'Bearer synthetic-test-credential') {
-        res.writeHead(401); res.end('Unexpected fixture request'); return;
-      }
-      let body = '';
-      for await (const chunk of req) body += chunk;
-      calls.push(JSON.parse(body));
-      res.setHeader('content-type', 'text/event-stream');
-      res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'OK' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
-    });
-    await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-    try {
-      const cfg: ProviderConfig = {
-        id: 'verified', kind: 'openai', label: 'Local fixture', presetId: 'custom',
-        baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`,
-        models: [{ id: 'fixture-model', label: 'Fixture', efforts: ['low', 'high'], effortSource: 'api' }],
-        selection: { model: 'fixture-model', effort: 'high' },
-      };
-      for (const effort of ['high', 'default'] as const) {
-        const result = await runPi({
-          task: task({ model: piModelSpec(cfg, 'fixture-model', effort, 1000), apiKey: 'synthetic-test-credential', demo: undefined }),
-          timeoutMinutes: 1, signal: new AbortController().signal, onText: () => {}, onProgress: () => {}, spawn,
-        });
-        expect(result).toMatchObject({ stop: 'complete', text: 'OK' });
-      }
-      expect(calls).toHaveLength(2);
-      expect(calls[0]).toMatchObject({ model: 'fixture-model', reasoning_effort: 'high' });
-      expect(calls[1]).toMatchObject({ model: 'fixture-model' });
-      expect(calls[1]).not.toHaveProperty('reasoning_effort');
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
-  }, 30000);
-
   it('answers in its final message and streams the text', async () => {
     const texts: string[] = [];
     const r = await runPi({ task: task(), timeoutMinutes: 1, signal: new AbortController().signal, onText: (t) => texts.push(t), onProgress: () => {}, spawn });

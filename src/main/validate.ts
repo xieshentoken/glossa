@@ -339,7 +339,7 @@ export const MAIN_ONLY_SETTINGS = ['agentTrust', 'settingsVersion'] as const;
 export function vSettingsPatch(v: unknown): Partial<Settings> {
   const o = obj(v, 'settings', [
     'uiLang', 'explainLang', 'hotkey', 'locateHotkey', 'captureHotkey', 'quickSkill', 'autoQuick', 'outputDir', 'dataScope', 'profile', 'theme', 'pdfDim',
-    'agentConcurrency', 'agentsEnabled', 'requireIsolation', 'providers', 'harnesses', 'defaults', 'skillOverrides',
+    'agentConcurrency', 'agentsEnabled', 'requireIsolation', 'providers', 'harnesses', 'defaults', 'skillOverrides', 'usageLimits',
   ]);
   const p: Partial<Settings> = {};
   if (o.uiLang !== undefined) p.uiLang = oneOf(o.uiLang, 'interface language', UI_LANGS);
@@ -377,6 +377,15 @@ export function vSettingsPatch(v: unknown): Partial<Settings> {
       agent: full(vAgentPartial(d.agent, 'agent engine'), ['harnessId', 'effort', 'budgetUsd', 'timeoutMinutes'], 'agent engine'),
     };
     p.defaults.agent.model ??= '';
+  }
+  if (o.usageLimits !== undefined) {
+    if (!isObj(o.usageLimits) || Object.keys(o.usageLimits).length > 40) fail('usage limits');
+    p.usageLimits = Object.fromEntries(
+      Object.entries(o.usageLimits as object).map(([k, x]) => {
+        const l = obj(x, 'usage limit', ['period', 'usd', 'tokens']);
+        return [vProviderId(k), { period: oneOf(l.period, 'limit period', ['day', 'month'] as const), usd: num(l.usd, 'dollar limit', 0, 100_000, false), tokens: num(l.tokens, 'token limit', 0, 1e11) }];
+      }),
+    );
   }
   if (o.skillOverrides !== undefined) {
     if (!isObj(o.skillOverrides) || Object.keys(o.skillOverrides).length > 200) fail('skill overrides');

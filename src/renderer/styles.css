@@ -93,6 +93,72 @@
   }
 }
 
+/*
+ * Paper: the interface and the cards as fine paper — warm ivory, ink, a deep ochre accent, a faint
+ * grain, warm soft shadows and serif titles. Opened documents keep their own look (the --paper-*
+ * tokens below stay those of the light theme).
+ */
+:root[data-theme='paper'] {
+  color-scheme: light;
+  --bg: #ece5d8;
+  --surface: #fbf8f1;
+  --surface-2: #f2ece0;
+  --surface-3: #e6dece;
+  --fg: #2b251d;
+  --muted: #6f6556;
+  --line: #e0d6c3;
+  --line-strong: #c9bba1;
+  --accent: #a8742a;
+  --accent-fg: #fffaf0;
+  --accent-soft: rgba(168, 116, 42, 0.13);
+  --accent-line: #8d5f20;
+  --focus: #7a4e19;
+  --link: #2c4a78;
+  --ok: #4a7a45;
+  --on-ok: #fbf8f1;
+  --err: #a63a2b;
+  --on-err: #fbf8f1;
+  --warn: #8a6117;
+  --warn-bg: #f6ecd6;
+  --warn-line: #e3cd9c;
+  --err-bg: #f7e6df;
+  --err-line: #e5bfb2;
+  --pdf-gutter: #e4dccd;
+  --scrim: rgba(43, 33, 18, 0.28);
+  --shadow-1: 0 1px 1px rgba(70, 50, 20, 0.06), 0 1px 3px rgba(70, 50, 20, 0.08);
+  --shadow-2: 0 18px 44px -10px rgba(70, 50, 20, 0.22), 0 4px 12px rgba(70, 50, 20, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', 'Source Serif 4', 'Noto Serif', Georgia, 'Songti SC', 'STSong',
+    'Noto Serif CJK SC', 'Source Han Serif SC', serif;
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .36 0 0 0 0 .27 0 0 0 0 .14 0 0 0 .055 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+:root[data-theme='paper'] body,
+:root[data-theme='paper'] .topbar,
+:root[data-theme='paper'] .card,
+:root[data-theme='paper'] .modal,
+:root[data-theme='paper'] .settings-nav { background-image: var(--grain); }
+:root[data-theme='paper'] .card { border-color: var(--line-strong); border-radius: 10px; }
+:root[data-theme='paper'] .card-head { border-bottom: 1px solid transparent; }
+:root[data-theme='paper'] .term-title,
+:root[data-theme='paper'] .term-card .term-input,
+:root[data-theme='paper'] .welcome h1,
+:root[data-theme='paper'] .modal-head h2,
+:root[data-theme='paper'] .pane-head h3,
+:root[data-theme='paper'] .usage-limits h4,
+:root[data-theme='paper'] .dock-item .dock-term { font-family: var(--serif); font-weight: 600; letter-spacing: 0.005em; }
+:root[data-theme='paper'] .term-title { font-size: 18px; }
+:root[data-theme='paper'] .welcome h1 { font-weight: 500; font-size: 30px; }
+:root[data-theme='paper'] .context-line { font-family: var(--serif); font-style: italic; }
+:root[data-theme='paper'] .card-body.stream,
+:root[data-theme='paper'] .card-body.plain-text { font-family: var(--serif); font-size: 15.5px; line-height: 1.7; }
+/* A hairline rule under the title, like a printed card. */
+:root[data-theme='paper'] .skills-row { border-top: 1px solid var(--line); padding-top: var(--s2); }
+:root[data-theme='paper'] .chip { background: transparent; border-color: var(--line-strong); }
+:root[data-theme='paper'] .chip.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--focus); }
+:root[data-theme='paper'] button.primary { background: var(--accent); box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.12); }
+:root[data-theme='paper'] .tab.on { background: var(--surface); box-shadow: var(--shadow-1); }
+:root[data-theme='paper'] .run-progress-fill { background: linear-gradient(90deg, var(--accent-line), var(--accent) 70%, #c99a4f); }
+:root[data-theme='paper'] .run-progress .run-progress-fill::after { background: linear-gradient(90deg, transparent, rgba(255, 248, 230, 0.6), transparent); }
+
 /* base */
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
@@ -498,6 +564,45 @@ label.inline { display: flex; gap: 6px; align-items: center; font-size: var(--fs
 .skills-table select { margin-inline-end: var(--s1); }
 .override-row td { background: var(--surface-2); }
 
+/* Run progress: a hairline at the top of a run, in the theme's amber. */
+.task-view { position: relative; }
+.run-progress {
+  position: absolute; inset: 0 0 auto 0; height: 3px; overflow: hidden; pointer-events: none;
+  background: var(--accent-soft); border-radius: 0 0 2px 2px; transition: opacity 420ms var(--ease) 700ms;
+}
+.run-progress-fill {
+  position: absolute; inset: 0; transform-origin: left center; transform: scaleX(0);
+  background: linear-gradient(90deg, var(--accent-line), var(--accent) 70%, #ffd75e);
+  border-radius: inherit; transition: transform 600ms var(--ease), background-color 240ms var(--ease);
+}
+/* A soft light passing over the bar while it works. */
+.run-progress:not(.ended):not(.waiting) .run-progress-fill::after {
+  content: ''; position: absolute; inset: 0; width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  animation: progress-sheen 1.8s var(--ease) infinite;
+}
+/* Waiting in the queue: a short segment sliding on the track. */
+.run-progress.waiting .run-progress-fill { width: 28%; transform: none; opacity: 0.55; animation: progress-wait 1.6s cubic-bezier(0.45, 0, 0.55, 1) infinite; }
+.run-progress.ended { opacity: 0; }
+.run-progress.ended .run-progress-fill { transform: scaleX(1); transition-duration: 380ms; }
+.run-progress.ok .run-progress-fill { background: var(--ok); }
+.run-progress.err .run-progress-fill { background: var(--err); }
+.run-progress.stop .run-progress-fill { background: var(--line-strong); }
+@keyframes progress-sheen { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
+@keyframes progress-wait { 0% { transform: translateX(-100%); } 100% { transform: translateX(360%); } }
+.usage-note { color: var(--warn); }
+.usage-limits h4 { margin: var(--s4) 0 var(--s1); font-size: var(--fs-md); }
+.usage-limits td input { width: 110px; }
+.usage-cell { display: flex; flex-direction: column; gap: 3px; min-width: 150px; }
+.usage-meter { position: relative; display: block; height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+.usage-meter > span { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: inherit; }
+.usage-meter.high > span { background: var(--warn); }
+.usage-meter.full > span { background: var(--err); }
+
+/* Formulas while an answer streams in (the finished answer renders them in its own page). */
+.md-math { display: block; margin: 0.5em 0; overflow-x: auto; overflow-y: hidden; }
+.stream .katex { font-size: 1.05em; }
+
 /* motion */
 @media (prefers-reduced-motion: no-preference) {
   button, .tab, input, select, textarea, .dock-item, .task-row {
@@ -513,5 +618,7 @@ label.inline { display: flex; gap: 6px; align-items: center; font-size: var(--fs
 @keyframes fade { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .pulse, .chip-status { animation: none !important; }
+  .run-progress-fill, .run-progress-fill::after { animation: none !important; transition: none !important; }
+  .run-progress.waiting .run-progress-fill { width: 100%; opacity: 0.35; }
   .status-icon.spin { animation-duration: 2.4s; }
 }

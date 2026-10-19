@@ -35,6 +35,9 @@ const api: GlossaApi = {
     importFolder: () => invoke(IPC.skillsImport),
     installKnown: (name) => invoke(IPC.skillsInstall, name),
   },
+  usage: {
+    status: () => invoke(IPC.usageStatus),
+  },
   capture: {
     area: (rect) => invoke(IPC.captureArea, rect),
     picture: (id) => invoke(IPC.capturePicture, id),

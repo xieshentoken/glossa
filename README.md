@@ -9,24 +9,19 @@ Each pick gets its own card; earlier cards stay. A card keeps every skill run
 started from it, can be dragged, resized, minimized and closed, and belongs to
 its document: switching documents shows that document's cards.
 
-Implementation notes: [`HANDOFF.md`](HANDOFF.md). Validation status:
-[`OPTIMIZATION_STATUS.md`](OPTIMIZATION_STATUS.md).
+Plan and roadmap: [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md).
 
 ## Run
 
-Use Node.js 22.19+ (22.x) or 24.x. Run these commands in the project directory:
-
 ```bash
-npm ci
+npm install
 npx install-electron        # only if npm blocked Electron's download script
 npm start                   # build + launch
 ```
 
-`npm start` builds the current source and opens the desktop app. After changing
-source code, run it again to rebuild and launch the updated version.
-
-Configure credentials through Settings. Local settings, keys, task workspaces,
-exports and backups are not part of the source repository.
+On macOS, double-click [`启动 Glossa.command`](../../启动%20Glossa.command) in the
+project root. It opens this v2 folder using its own Electron runtime. After changing
+source code, run `npm run build` before using the launcher.
 
 Without an API key you can try everything with **Settings → Models & effort →
 Offline demo (no AI)**. For real answers add a key in **Settings → Model
@@ -130,7 +125,30 @@ HTML result with its own files becomes a folder). The same result is not written
 one gets " (2)". Each skill can use the default folder, its own folder, or not be saved (Settings →
 Skills → Engine for this skill). The card links to the copy.
 
-**Appearance:** System, Light or Dark (the sun/moon button in the top bar, or Settings → General).
+**Formulas:** answers can contain LaTeX — `$…$` inline, `$$…$$` (or `\[…\]`) on their own line — and
+cards show them typeset (KaTeX 0.19, rendered ahead of time into the script-free result page; also while the
+answer streams in). Prices such as "$5 and $10" and anything in code stay text. Models are asked to write
+formulas this way. The plain-text view and saved copies keep the LaTeX source.
+
+**Card size:** every card opens at the same size (480×460) and keeps it whatever skill runs in it, Markdown or
+HTML; only you change it (drag the corner, maximize / restore), and your size stays when you switch skills.
+
+**Progress:** a run in progress shows a thin amber bar at the top of its result: a sliding segment while it
+waits in the queue, then a bar that grows while it works. Models report no percentage, so this is an estimate
+(time so far and, for short answers, how much of the answer has arrived); it never fills by itself. A finished
+run fills it, green, and it fades; red on failure. With reduced motion set in the system, it does not animate.
+
+**Usage limits:** Settings → Models & effort → *Usage limits* sets, per connection (that is, per API key), a
+daily or monthly limit in dollars and/or tokens, and shows what was used so far. Dollars count where the model's
+price is known (catalogued models on their official endpoint); tokens always. At 80% the card says so; at the
+limit nothing new runs on that connection, the automatic Quick explanation included, and the card says why and
+when it resets. Each Pi run is also held to the dollars left. Cached answers still show. Only Glossa's own use is
+counted: **also set a spending limit in your provider's console**, which covers other apps and a leaked key.
+
+**Appearance:** System, Light, Dark or **Paper** (the theme button in the top bar cycles through them, or
+Settings → General). Paper dresses the interface and the cards, answers included, as fine paper: warm ivory,
+ink, a deep ochre accent, a faint grain, warm shadows and serif titles and answers. Opened documents keep
+their own look.
 System follows the operating system. Documents get a dark page in the dark theme; PDF pages can
 be dimmed too (off by default, it inverts their colours).
 

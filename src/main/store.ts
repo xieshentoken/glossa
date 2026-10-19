@@ -6,6 +6,7 @@ import path from 'node:path';
 import { mergeSettings } from '../shared/defaults';
 import type { DocInfo, DocRecord, ProviderConfig, Settings, TermCard, UiLang } from '../shared/types';
 import { CaptureStore } from './captures';
+import { UsageStore } from './usage';
 import { KeyStore, type KeyBackend, type KeyStatus } from './secrets';
 
 
@@ -36,6 +37,8 @@ export class Store {
   readonly keys: KeyStore;
   /** Pictures of captured areas. */
   readonly captures: CaptureStore;
+  /** What each connection used, per day and month. */
+  readonly usage: UsageStore;
   private settings: Settings;
   /** Called after every settings change (the app applies the theme here). */
   onSettings?: (s: Settings) => void;
@@ -54,6 +57,7 @@ export class Store {
     for (const d of [dir, this.docsDir, this.jobsDir, this.skillsDir]) fs.mkdirSync(d, { recursive: true });
     this.keys = new KeyStore(this.secretsFile, backend);
     this.captures = new CaptureStore(path.join(dir, 'captures'));
+    this.usage = new UsageStore(path.join(dir, 'usage.json'));
     this.settings = mergeSettings(readJson<Partial<Settings> | undefined>(this.settingsFile, undefined), uiLang);
   }
 

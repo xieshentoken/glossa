@@ -1,12 +1,33 @@
 # Glossa 稳定化记录（P0 / P1，2026-10-17）
 
-## v2.4 发布检查（2026-10-19，macOS arm64）
+## v2.5 发布检查（2026-10-19，macOS arm64）
 
-- **隐私清理**：移除文档中的机器专属路径；安全测试中的密钥形状字符串改为明确的合成凭据。源码及原远端历史扫描未发现真实凭据或个人主机标识；保留上游作者 / 许可证及有意设计的负面测试。依赖、构建产物、用户配置、密钥、任务结果、截图和本机备份不属于发布内容，相关路径已加入 `.gitignore`。
-- **修复**：已验证连接中发现的模型思考强度原先只用于连接测试，实际 Pi 任务仍依赖旧配置标记，可能漏传所选强度；模型映射现读取已保存的能力信息。新增真实 worker + 本地 HTTP 夹具回归，验证指定强度发送、服务商默认不附加该参数。
-- **验证 PASS**：类型检查；20 个测试文件 / 258 项；构建；macOS Electron 44.8.0 两次启动冒烟，含阅读器、区域截图、文内定位、多栏缩放、卡片恢复、网页权限、缓存及模型配置完整路径。本轮未跳过本地模型连接步骤，未禁用 Electron 沙箱；使用独立临时用户目录及合成数据。
-- **依赖审计 OPEN**：`npm audit` 报告 3 条中危、0 条高危 / 严重，来自同一条 `mammoth → argparse → sprintf-js` 依赖链（[GHSA-hp3w-g68c-fv3c](https://github.com/advisories/GHSA-hp3w-g68c-fv3c)，审计时无补丁版本）。检查所装源码：`argparse` 由 Mammoth 的命令行入口使用；Glossa 只调用库的 `convertToHtml` / `extractRawText`，主进程构建未包含该调用。保留锁定依赖，不采用审计建议的破坏性 Mammoth 降级；后续跟进上游修复。
-- **边界**：未调用真实模型 / 付费账户，未验证真实密钥的系统钥匙串写入；Windows 未测。静态扫描不能证明不存在任何未知形式的敏感信息。下方各历史记录保留其当时的验证范围。
+- **隐私清理**：移除文档中的机器专属绝对路径（本机临时目录、只读基线快照路径）；安全测试中的密钥形状字符串统一为明确的合成凭据（`sk-synthetic-test-only-…`）。对源码、文档、测试与夹具全树扫描，未发现真实凭据、个人主机名、账号或密码；保留上游作者 / 许可证信息与有意设计的负面测试（如 `sk-secret-123` 的日志脱敏用例）。
+- **不在发布范围**：依赖、构建产物、用户配置、密钥、任务结果、截图与本机备份；上述路径已由 `.gitignore` 覆盖。
+- **验证 PASS**：`npm run typecheck`；22 个测试文件 / 274 项；`npm run build`；macOS Electron 启动后阅读器窗口与界面正常加载。
+- **依赖审计沿用 OPEN**：`npm audit` 报告 3 条中危、0 条高危 / 严重，来自同一条 `mammoth → argparse → sprintf-js` 依赖链（[GHSA-hp3w-g68c-fv3c](https://github.com/advisories/GHSA-hp3w-g68c-fv3c)）；依赖锁定不变，跟进上游修复。
+- **边界**：未调用真实模型 / 付费账户；静态扫描不能证明不存在任何未知形式的敏感信息。
+
+<!-- round6-checkpoint:start -->
+## 第六轮：LaTeX 公式、固定卡片尺寸、纸张主题（2026-10-18，Linux arm64 无界面副本）
+
+- **公式**：新增依赖 `katex` **0.19.0**（MIT，精确锁定，经 npm 联网安装）。`shared/math.ts` 识别 `$…$`、`$$…$$`、`\(…\)`、`\[…\]`（Pandoc 规则：价格如“$5 and $10”不算公式；代码块 / 行内代码、转义 `\$` 不处理），以 KaTeX（`trust: false`、`throwOnError: false`）渲染。结果页：先替换为占位符再交给 Markdown，最后放回；仅含公式时链接 `_katex/katex.min.css`，样式与字体由主进程从 `dist/katex/` 提供（构建时复制 CSS 与 woff2 字体），结果页 CSP 仅增加 `style-src` / `font-src glossa-out:`，仍无脚本、无网络。流式显示（`MiniMarkdown`）同样渲染公式。提示词要求模型以 LaTeX 书写公式。纯文本视图与保存的副本保留 LaTeX 源码。
+- **卡片尺寸**：删除按结果类型放大卡片的逻辑（`sizeForResult` / `RESULT_SIZE`），所有新卡片、从任务面板重建的卡片与旧数据转换统一为 `CARD_SIZE` 480×460（较原 460×400 略大，以保证结果区约 240px）；尺寸只由用户（调整手柄、最大化 / 还原）改变。
+- **纸张主题**：`ThemePref` 增加 `paper`（对系统而言为浅色：原生对话框、滚动条、`prefers-color-scheme`）。`:root[data-theme='paper']` 重设界面令牌（象牙白、墨色、赭石强调色、暖色阴影、细微纸纹 SVG 噪点）与衬线标题 / 卡片正文；文档令牌（`--paper-*`）不变，故已打开的文档外观不受影响。卡片结果页以 `?theme=paper` 使用同一配色、纸纹与衬线字体；HTML 结果（Anatomy）仍按浅色生成。主题按钮循环：系统 → 浅色 → 深色 → 纸张。
+- **验证**：`npm run typecheck` PASS；`npm test` 22 个文件 / 274 项 PASS（新增 `test/math-paper.test.ts` 9 项：定界符、价格 / 代码 / 转义不误判、KaTeX 不生成链接或标签、公式经 Markdown 保留且独立公式为块、提示词、结果页仅在有公式时链接 KaTeX、KaTeX 文件服务只放行 CSS 与字体、纸张结果页、主题校验；`cards.test.ts` 更新为固定尺寸）；`npm run build` PASS；Electron 冒烟两次启动 PASS（新增：用调整手柄缩小卡片后运行技能尺寸不变；Quick / ELI5 / Anatomy 之间切换尺寸不变；纸张主题下卡片与回答的配色和衬线字体、真实结果页中 2 个公式渲染且 KaTeX 样式与字体由应用提供、价格保持为文字；主题按钮四种循环）。冒烟脚本调整：卡片变大后，取 “basics” 前先移开第二张卡片，吸附测试前先手动缩小两张卡片。截图：`../.checkpoints/feat7-20261018-183911/shots/11-paper-formula.png`、`11b-paper-settings.png`。
+- **NOT RUN**：真实模型输出公式的效果（冒烟用离线模型，公式由测试写入结果文件）；macOS / Windows 上衬线字体的实际回退（字体栈依次为 Iowan Old Style / Palatino / Georgia / 宋体等）。
+- **快照**：改前 `../.checkpoints/feat7-20261018-183911/before.tar.gz`，完成 `done.tar.gz`。
+<!-- round6-checkpoint:end -->
+
+<!-- round5-checkpoint:start -->
+## 第五轮：用量上限、卡片进度条（2026-10-18，Linux arm64 无界面副本）
+
+- **用量上限**：`Settings.usageLimits`（连接 id → `{ period: day|month, usd, tokens }`，0 = 不限）；账本 `userData/usage.json`（`src/main/usage.ts`，按本地日期与月份累计美元 / 令牌 / 次数 / 价格未知次数，保留约 62 天与 12 个月）。Pi worker 现回报整次运行的令牌数与价格是否已知；每次 Pi 运行（含失败但已返回的运行）按所用连接记账，外部 CLI 按其密钥所属连接记美元。运行开始前检查（缓存命中不受影响，自动速览同样被拒），拒绝信息含已用 / 上限与重置日期；Pi 运行的预算不超过剩余美元（简短回答原先无预算）；达到 80% 时结果带 `usageNote` 显示在卡片上。设置 → 模型与思考强度 → 用量上限：每个连接一行（周期、美元、令牌、本期已用与进度条、重置日期、价格未知次数），并提示同时在服务商控制台设限。IPC `usage:status`。
+- **进度条**：`RunProgress`（卡片结果顶部 3px）与 `shared/progress.ts` 估算：排队 = 滑动片段；简短回答在首段文字前不超过 50%，之后随已到文字增长；任务目录技能随时间缓慢增长，上限约 90%；完成填满变绿、失败变红、取消变灰，约 1.4 秒后淡出；重新打开已结束的运行不播放动画；`prefers-reduced-motion` 时无动画。颜色全部取自主题变量（明暗两套）。
+- **验证**：`npm run typecheck` PASS；`npm test` 21 个文件 / 265 项 PASS（新增 `test/usage-progress.test.ts` 8 项：账本跨日 / 跨月、比例、设置校验、运行记账与剩余预算、达到上限拒绝（含自动速览）且缓存仍可用、仅令牌上限、失败运行也记账、进度估算）；`npm run build` PASS；Electron 冒烟两次启动 PASS（新增：排队时进度条为等待片段、运行中数值增长、简短回答思考阶段低于 50%、达到上限时点击被拒并显示原因、设置中用量上限表存在）。外观另以应用样式表单独渲染明暗主题各阶段核对：`../.checkpoints/feat6-20261018-182642/shots/bar-light.png`、`bar-dark.png`。
+- **NOT RUN / 限制**：真实服务商的价格与令牌回报（冒烟用离线演示模型）；Pi 运行若以超时 / 进程异常结束（未返回结果），该次用量无法记入；只统计 Glossa 自身用量。
+- **快照**：改前 `../.checkpoints/feat6-20261018-182642/before.tar.gz`，完成 `done.tar.gz`。
+<!-- round5-checkpoint:end -->
 
 <!-- round4-checkpoint:start -->
 ## 第四轮：框选区域解释、网页取词焦点修复（2026-10-18，Linux arm64 无界面副本）

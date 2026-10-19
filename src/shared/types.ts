@@ -4,10 +4,13 @@ export const EFFORTS: Effort[] = ['default', 'none', 'minimal', 'low', 'medium',
 export type UiLang = 'en' | 'de' | 'fr' | 'zh';
 
 /** What the user chose; 'system' follows the operating system. */
-export type ThemePref = 'system' | 'light' | 'dark';
-export const THEME_PREFS: ThemePref[] = ['system', 'light', 'dark'];
+/** 'paper': the interface and cards as fine paper (light underneath; documents keep their own look). */
+export type ThemePref = 'system' | 'light' | 'dark' | 'paper';
+export const THEME_PREFS: ThemePref[] = ['system', 'light', 'dark', 'paper'];
 /** What is shown. */
 export type Theme = 'light' | 'dark';
+/** How a card's result page looks: the theme shown, or paper. */
+export type ViewTheme = Theme | 'paper';
 export const UI_LANGS: UiLang[] = ['en', 'de', 'fr', 'zh'];
 
 export type OutputKind = 'markdown' | 'html';
@@ -92,6 +95,31 @@ export interface SkillOverride {
   outputDir?: string;
 }
 
+/** A limit on what one model connection (one API key) may use in Glossa per day or month. 0 = no limit of that kind. */
+export interface UsageLimit {
+  period: 'day' | 'month';
+  usd: number;
+  tokens: number;
+}
+
+export interface UsageTotals {
+  usd: number;
+  tokens: number;
+  runs: number;
+  /** Runs whose dollars are not counted (price unknown). */
+  unpriced: number;
+}
+
+export interface UsageStatus extends UsageTotals {
+  providerId: string;
+  period: UsageLimit['period'];
+  /** Start of the next period (local time), when the limit resets. */
+  resetsAt: number;
+  limit?: UsageLimit;
+  /** Share of the limit used, the larger of dollars and tokens; undefined without a limit. */
+  ratio?: number;
+}
+
 /** How much of the document leaves the computer with a request. */
 export type DataScope = 'sentence' | 'paragraph' | 'document';
 export const DATA_SCOPES: DataScope[] = ['sentence', 'paragraph', 'document'];
@@ -129,6 +157,8 @@ export interface Settings {
   harnesses: HarnessConfig[];
   defaults: { quick: DirectEngine; direct: DirectEngine; agent: AgentEngine };
   skillOverrides: Record<string, SkillOverride>;
+  /** Connection id → its usage limit (see main/usage.ts). */
+  usageLimits: Record<string, UsageLimit>;
 }
 
 export type LocalizedText = Partial<Record<UiLang, string>> & { en?: string };
@@ -211,6 +241,8 @@ export interface JobState {
   savedTo?: string;
   /** Copying the result to the output folder failed (the result itself is fine). */
   saveError?: string;
+  /** The connection is near its usage limit (shown on the card). */
+  usageNote?: string;
 }
 
 export interface Rect {

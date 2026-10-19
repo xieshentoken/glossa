@@ -122,7 +122,9 @@ export function App() {
     if (!settings) return;
     document.documentElement.lang = settings.uiLang;
     document.documentElement.dataset.pdfDim = settings.pdfDim ? '1' : '';
-  }, [settings?.uiLang, settings?.pdfDim]);
+    // Paper restyles the interface and the cards (styles.css); light underneath (set by the main process).
+    document.documentElement.dataset.theme = settings.theme === 'paper' ? 'paper' : '';
+  }, [settings?.uiLang, settings?.pdfDim, settings?.theme]);
 
   const updateSettings = useCallback(async (patch: Partial<SettingsT>) => {
     try {
@@ -468,7 +470,7 @@ export function App() {
         addTab(doc);
         await loadCards(doc.docId);
       }
-      cards.reveal(job.docId, jobId, request, job.output);
+      cards.reveal(job.docId, jobId, request);
       setShowTasks(false);
     });
 
@@ -657,7 +659,7 @@ export function App() {
                 jobs={jobs}
                 skills={enabledSkills}
                 settings={settings}
-                theme={shownTheme}
+                theme={settings.theme === 'paper' ? 'paper' : shownTheme}
                 t={t}
                 focused={card.id === cards.focused}
                 zIndex={card.id === cards.focused ? 1000 : 10 + i}
@@ -742,9 +744,9 @@ function kindIcon(d: Pick<DocInfo, 'kind' | 'source'>): string {
   return { web: 'WEB', pdf: 'PDF', docx: 'DOC', markdown: 'MD', text: 'TXT', html: 'HTML' }[d.kind];
 }
 
-const THEME_LABEL = { system: 'themeSystem', light: 'light', dark: 'dark' } as const;
-const THEME_ICON: Record<ThemePref, IconName> = { system: 'system', light: 'sun', dark: 'moon' };
-const NEXT_THEME: Record<ThemePref, ThemePref> = { system: 'light', light: 'dark', dark: 'system' };
+const THEME_LABEL = { system: 'themeSystem', light: 'light', dark: 'dark', paper: 'themePaper' } as const;
+const THEME_ICON: Record<ThemePref, IconName> = { system: 'system', light: 'sun', dark: 'moon', paper: 'paper' };
+const NEXT_THEME: Record<ThemePref, ThemePref> = { system: 'light', light: 'dark', dark: 'paper', paper: 'system' };
 
 /** Where a document comes from: host of a web page, or the folder (or file name) of a file. */
 function whereFrom(d: DocInfo, part: 'folder' | 'file' = 'folder'): string {

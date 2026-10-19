@@ -1,9 +1,9 @@
 // glossa-out://<jobId>/<path> — serves finished results to the sandboxed viewer.
 
-import type { Settings, Theme } from '../shared/types';
+import type { Settings, Theme, ViewTheme } from '../shared/types';
 import { readFileSafe } from './fs-safe';
 import type { JobManager } from './jobs';
-import { HTML_OUTPUT_CSP, MARKDOWN_OUTPUT_CSP, markdownPage, mimeFor } from './output';
+import { HTML_OUTPUT_CSP, KATEX_PATH, MARKDOWN_OUTPUT_CSP, markdownPage, mimeFor } from './output';
 import { OUTPUT_SPECS } from './output-contract';
 
 const ASSET_MAX = 25 * 1024 * 1024;
@@ -13,8 +13,21 @@ function notFound(msg: string): Response {
 }
 
 /** `theme` is the one shown when the viewer does not ask for one. */
-export async function serveOutput(url: string, jobs: JobManager, settings: Settings, theme: Theme): Promise<Response> {
+export async function serveOutput(url: string, jobs: JobManager, settings: Settings, shown: Theme, katexDir?: string): Promise<Response> {
+  let theme: ViewTheme = shown;
   const u = new URL(url);
+  // KaTeX's stylesheet and fonts for formulas in Markdown results; read-only files of the app.
+  if (katexDir && u.pathname.startsWith(`/${KATEX_PATH}`)) {
+    const rel = u.pathname.slice(KATEX_PATH.length + 1);
+    if (!/^(katex\.min\.css|fonts\/[\w-]+\.(woff2|woff|ttf))$/.test(rel)) return notFound('Not found');
+    try {
+      return new Response(new Uint8Array(readFileSafe(katexDir, rel, { maxBytes: 2 * 1024 * 1024 })), {
+        headers: { 'content-type': mimeFor(rel), 'content-security-policy': MARKDOWN_OUTPUT_CSP, 'x-content-type-options': 'nosniff', 'cache-control': 'max-age=86400' },
+      });
+    } catch {
+      return notFound('Not found');
+    }
+  }
   let root: string | undefined;
   try {
     root = jobs.outputDir(u.host);
@@ -24,7 +37,7 @@ export async function serveOutput(url: string, jobs: JobManager, settings: Setti
   const job = root ? jobs.get(u.host) : undefined;
   if (!root || !job) return notFound('This result is missing. Close the card and run it again.');
   const q = u.searchParams.get('theme');
-  if (q === 'light' || q === 'dark') theme = q;
+  if (q === 'light' || q === 'dark' || q === 'paper') theme = q;
   const csp = job.output === 'markdown' ? MARKDOWN_OUTPUT_CSP : HTML_OUTPUT_CSP;
   const headers = (type: string) => ({ 'content-type': type, 'content-security-policy': csp, 'x-content-type-options': 'nosniff' });
   try {

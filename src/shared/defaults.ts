@@ -70,6 +70,7 @@ export function defaultSettings(uiLang: UiLang = 'en'): Settings {
       agent: { harnessId: 'pi', providerId: '', model: '', effort: 'default', budgetUsd: 5, timeoutMinutes: 60 },
     },
     skillOverrides: {},
+    usageLimits: {},
   };
 }
 
@@ -153,6 +154,7 @@ export function mergeSettings(stored: LegacySettings | undefined, uiLang: UiLang
     },
     skillOverrides: saved.skillOverrides ?? {},
     agentTrust: saved.agentTrust ?? {},
+    usageLimits: saved.usageLimits ?? {},
   };
 }
 

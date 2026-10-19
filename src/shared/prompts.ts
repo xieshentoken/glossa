@@ -12,7 +12,8 @@ How to work:
 - Write for an intelligent reader who is not an expert in the field, unless the reader profile says otherwise.
 - Answer in the requested answer language. When the term is in another language, keep the original term and also give the usual English term if it differs.
 - Be accurate. If the passage does not give enough information to be sure what the term means here, say so briefly and give the most likely meaning.
-- Output Markdown only, without a preamble.`;
+- Output Markdown only, without a preamble.
+- Write formulas in LaTeX: $…$ inline, $$…$$ on their own line. Do not put formulas in code blocks.`;
 
 /** Max document characters sent as the cached prefix. */
 export const MAX_DOC_CHARS = 400_000;

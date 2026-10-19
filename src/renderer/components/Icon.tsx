@@ -6,7 +6,7 @@ import type { ReactElement } from 'react';
 export type IconName =
   | 'close' | 'minimize' | 'maximize' | 'restore' | 'stop' | 'retry' | 'settings' | 'tasks'
   | 'sun' | 'moon' | 'system' | 'clock' | 'more' | 'open' | 'alert' | 'check'
-  | 'plus' | 'up' | 'down' | 'back' | 'forward' | 'edit' | 'text' | 'code' | 'layout1' | 'layout2' | 'layout3' | 'locate' | 'folder' | 'scan';
+  | 'plus' | 'up' | 'down' | 'back' | 'forward' | 'edit' | 'text' | 'code' | 'layout1' | 'layout2' | 'layout3' | 'locate' | 'folder' | 'scan' | 'paper';
 
 const PATHS: Record<IconName, ReactElement> = {
   close: <path d="M18 6 6 18M6 6l12 12" />,
@@ -77,6 +77,12 @@ const PATHS: Record<IconName, ReactElement> = {
       <circle cx="12" cy="12" r="7" />
       <circle cx="12" cy="12" r="2.5" />
       <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+    </>
+  ),
+  paper: (
+    <>
+      <path d="M6 3h9l4 4v14H6z" />
+      <path d="M15 3v4h4M9 11h7M9 15h7M9 19h4" />
     </>
   ),
   scan: <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M8 12h8" />,

@@ -2,8 +2,8 @@
 // open document stay in memory; only the active document's cards are shown.
 
 import { useCallback, useRef, useState } from 'react';
-import { fitRect, placeCard, type Bounds } from '../../shared/card-geometry';
-import { CARD_SIZE, docCards, RESULT_SIZE, runKey, sizeForResult } from '../../shared/cards';
+import { placeCard, type Bounds } from '../../shared/card-geometry';
+import { CARD_SIZE, docCards, runKey } from '../../shared/cards';
 import type { CardTask, Effort, JobRequest, JobState, PickedTerm, SkillInfo, TermCard } from '../../shared/types';
 import { api } from '../api';
 import { uid } from './uid';
@@ -111,7 +111,6 @@ export function useTermCards(opts: {
               ...c,
               tasks: [...c.tasks, task],
               activeTask: task.id,
-              rect: c.window === 'maximized' ? c.rect : fitRect(sizeForResult(c.rect, skill.output), ref.current.opts.bounds()),
             }),
           );
         });
@@ -139,7 +138,7 @@ export function useTermCards(opts: {
    * closed, brings it back with the run (its context was fixed when it started).
    */
   const reveal = useCallback(
-    (docId: string, jobId: string, request: JobRequest | undefined, output: keyof typeof RESULT_SIZE = 'markdown') => {
+    (docId: string, jobId: string, request: JobRequest | undefined) => {
       const card = (ref.current.byDoc[docId] ?? []).find((c) => c.tasks.some((t) => t.jobId === jobId));
       if (card) {
         const task = card.tasks.find((t) => t.jobId === jobId)!;
@@ -155,7 +154,7 @@ export function useTermCards(opts: {
         term: request.context.term,
         context: request.context,
         explainLang: request.explainLang,
-        rect: placeCard({ x: 40, y: 40, height: 0 }, RESULT_SIZE[output], ref.current.opts.bounds(), existing),
+        rect: placeCard({ x: 40, y: 40, height: 0 }, CARD_SIZE, ref.current.opts.bounds(), existing),
         window: 'normal',
         tasks: [task],
         activeTask: task.id,

@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { InvalidArgument, vTermCards } from '../src/main/validate';
 import { Store } from '../src/main/store';
 import { fitRect, GAP, maximized, placeCard, snapMove, snapResize, SNAP } from '../src/shared/card-geometry';
-import { cardJobIds, docCards, fromLegacy, runKey, sizeForResult } from '../src/shared/cards';
+import * as cardsModule from '../src/shared/cards';
+import { CARD_SIZE, cardJobIds, docCards, fromLegacy, runKey } from '../src/shared/cards';
 import type { LegacyCard, TermCard } from '../src/shared/types';
 import { box, req, tmpDir } from './helpers';
 
@@ -39,7 +40,7 @@ describe('legacy cards', () => {
     expect(c.tasks).toEqual([{ id: 'old1', jobId: 'mabc123-0011223344', skill: 'eli5', createdAt: 5, request: req('eli5') }]);
     expect(c.context).toEqual(req('eli5').context);
     // A collapsed pill stays out of the way; a tiny saved size gets a usable one.
-    expect(fromLegacy(legacy({ expanded: false, rect: { x: 1, y: 2, w: 0, h: 0 } }))).toMatchObject({ window: 'minimized', rect: { x: 1, y: 2, w: 460, h: 400 } });
+    expect(fromLegacy(legacy({ expanded: false, rect: { x: 1, y: 2, w: 0, h: 0 } }))).toMatchObject({ window: 'minimized', rect: { x: 1, y: 2, w: 480, h: 460 } });
   });
 
   it('are read when no new cards were saved; new cards win once saved', () => {
@@ -118,9 +119,9 @@ describe('runs', () => {
     expect(runKey({ ...a, direct: {} })).toBe(runKey(a));
   });
 
-  it('grow the card to fit a result but never shrink it', () => {
-    expect(sizeForResult({ x: 1, y: 2, w: 300, h: 200 }, 'html')).toEqual({ x: 1, y: 2, w: 760, h: 540 });
-    expect(sizeForResult({ x: 1, y: 2, w: 900, h: 700 }, 'markdown')).toEqual({ x: 1, y: 2, w: 900, h: 700 });
+  it('have one size whatever skill runs in them; nothing resizes a card by result type', () => {
+    expect(CARD_SIZE).toEqual({ w: 480, h: 460 });
+    expect('sizeForResult' in cardsModule || 'RESULT_SIZE' in cardsModule).toBe(false);
   });
 });
 

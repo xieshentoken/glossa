@@ -34,6 +34,7 @@ const rootDir = app.getAppPath();
 const rendererDir = path.join(rootDir, 'dist', 'renderer');
 const webviewPreload = path.join(rootDir, 'dist', 'preload', 'webview.js');
 const piWorker = path.join(rootDir, 'dist', 'main', 'pi-worker.mjs');
+const katexDir = path.join(rootDir, 'dist', 'katex');
 
 /** The built-in Pi agent runs each job in its own Electron utility process. */
 const spawnPi: SpawnWorker = (env) => {
@@ -51,13 +52,17 @@ let win: BrowserWindow | null = null;
 
 // The theme lives in nativeTheme: CSS (prefers-color-scheme), native dialogs and
 // scrollbars follow it from the first paint. 'system' follows the OS.
-const WINDOW_BG: Record<Theme, string> = { dark: '#141518', light: '#f5f5f7' };
+const WINDOW_BG: Record<Theme | 'paper', string> = { dark: '#141518', light: '#f5f5f7', paper: '#ece5d8' };
+/** Paper is a light theme to the system (dialogs, scrollbars, prefers-color-scheme). */
+const windowBg = () => WINDOW_BG[store?.getSettings().theme === 'paper' ? 'paper' : shownTheme()];
 const shownTheme = (): Theme => (nativeTheme.shouldUseDarkColors ? 'dark' : 'light');
 function applyTheme(s: Settings): void {
-  if (nativeTheme.themeSource !== s.theme) nativeTheme.themeSource = s.theme;
+  const source = s.theme === 'paper' ? 'light' : s.theme;
+  if (nativeTheme.themeSource !== source) nativeTheme.themeSource = source;
+  if (win && !win.isDestroyed()) win.setBackgroundColor(windowBg());
 }
 nativeTheme.on('updated', () => {
-  if (win && !win.isDestroyed()) win.setBackgroundColor(WINDOW_BG[shownTheme()]);
+  if (win && !win.isDestroyed()) win.setBackgroundColor(windowBg());
 });
 let store: Store;
 let skills: SkillRegistry;
@@ -83,7 +88,7 @@ function registerProtocols(): void {
       return new Response('Not found', { status: 404 });
     }
   });
-  protocol.handle('glossa-out', (req) => serveOutput(req.url, jobs, store.getSettings(), shownTheme()));
+  protocol.handle('glossa-out', (req) => serveOutput(req.url, jobs, store.getSettings(), shownTheme(), katexDir));
 }
 
 function sendToRenderer(channel: string, ...args: unknown[]): void {
@@ -157,7 +162,7 @@ async function createWindow(): Promise<void> {
     minWidth: 720,
     minHeight: 480,
     title: 'Glossa',
-    backgroundColor: WINDOW_BG[shownTheme()],
+    backgroundColor: windowBg(),
     show: !process.env.GLOSSA_SMOKE,
     webPreferences: {
       preload: path.join(rootDir, 'dist', 'preload', 'app.js'),

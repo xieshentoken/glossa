@@ -19,6 +19,8 @@ import {
   type SkillOverride,
   type ThemePref,
   type UiLang,
+  type UsageLimit,
+  type UsageStatus,
 } from '../../shared/types';
 import { api } from '../api';
 import { langName } from '../lib/lang';
@@ -179,6 +181,7 @@ function General({ settings, t, onChange, onSaved }: PaneProps) {
           <option value="system">{t('themeSystem')}</option>
           <option value="light">{t('light')}</option>
           <option value="dark">{t('dark')}</option>
+          <option value="paper">{t('themePaper')}</option>
         </select>
       </label>
       <label className="check">
@@ -377,7 +380,88 @@ function Models({ settings, t, onChange }: PaneProps) {
       <p className="muted small">{connectionCopy(settings.uiLang).defaultsHint}</p>
       <p className="muted small">{t('maxTokensNote')}</p>
       <p className="muted small">{settings.harnesses.find((h) => h.id === d.agent.harnessId)?.kind === 'pi' ? t('piBudgetNote') : budgetNote(t, settings.harnesses.find((h) => h.id === d.agent.harnessId)?.command ?? '')}</p>
+      <UsageLimits settings={settings} t={t} onChange={onChange} />
     </div>
+  );
+}
+
+/** A day's or month's limit per connection (that is, per API key), with what it used so far. */
+function UsageLimits({ settings, t, onChange }: Pick<PaneProps, 'settings' | 't' | 'onChange'>) {
+  const [status, setStatus] = useState<UsageStatus[]>([]);
+  useEffect(() => {
+    void api.usage.status().then(setStatus);
+  }, [settings.usageLimits]);
+  const lang = settings.uiLang;
+  const set = (id: string, patch: Partial<UsageLimit>) => {
+    const cur = settings.usageLimits[id] ?? { period: 'month' as const, usd: 0, tokens: 0 };
+    const next = { ...cur, ...patch };
+    const all = { ...settings.usageLimits };
+    if (!next.usd && !next.tokens && next.period === 'month') delete all[id];
+    else all[id] = next;
+    void onChange({ usageLimits: all });
+  };
+  const money = new Intl.NumberFormat(lang, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
+  const count = new Intl.NumberFormat(lang, { notation: 'compact' });
+  const day = new Intl.DateTimeFormat(lang, { month: 'short', day: 'numeric' });
+  return (
+    <section className="usage-limits" data-testid="usage-limits">
+      <h4>{t('usageLimits')}</h4>
+      <p className="muted small">{t('usageIntro')}</p>
+      <table className="engine-table">
+        <thead>
+          <tr>
+            <th>{t('provider')}</th>
+            <th>{t('usagePeriod')}</th>
+            <th>{t('limitUsd')}</th>
+            <th>{t('limitTokens')}</th>
+            <th>{t('usedSoFar')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {settings.providers.filter((p) => p.kind !== 'fake').map((p) => {
+            const l = settings.usageLimits[p.id];
+            const s = status.find((x) => x.providerId === p.id);
+            const ratio = s?.ratio;
+            return (
+              <tr key={p.id} data-provider={p.id}>
+                <th>{p.label}</th>
+                <td>
+                  <select value={l?.period ?? 'month'} onChange={(e) => set(p.id, { period: e.target.value as UsageLimit['period'] })}>
+                    <option value="day">{t('perDay')}</option>
+                    <option value="month">{t('perMonth')}</option>
+                  </select>
+                </td>
+                <td>
+                  <input type="number" min={0} step={1} placeholder={t('noLimit')} value={l?.usd || ''} data-testid={`limit-usd-${p.id}`} onChange={(e) => set(p.id, { usd: Math.max(0, Number(e.target.value) || 0) })} />
+                </td>
+                <td>
+                  <input type="number" min={0} step={10000} placeholder={t('noLimit')} value={l?.tokens || ''} onChange={(e) => set(p.id, { tokens: Math.max(0, Math.round(Number(e.target.value) || 0)) })} />
+                </td>
+                <td className="usage-cell">
+                  {s && (
+                    <>
+                      <span className="small">
+                        {money.format(s.usd)} · {count.format(s.tokens)} {t('tokens')}
+                      </span>
+                      {ratio !== undefined && (
+                        <span className={`usage-meter ${ratio >= 1 ? 'full' : ratio >= 0.8 ? 'high' : ''}`} title={`${Math.round(ratio * 100)}%`}>
+                          <span style={{ width: `${Math.min(100, ratio * 100)}%` }} />
+                        </span>
+                      )}
+                      <span className="muted small">
+                        {t('usageResets', { date: day.format(s.resetsAt) })}
+                        {s.unpriced ? ` · ${t('usageUnpriced', { n: String(s.unpriced) })}` : ''}
+                      </span>
+                    </>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="muted small">{t('usageProviderHint')}</p>
+    </section>
   );
 }
 

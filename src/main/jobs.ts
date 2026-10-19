@@ -188,6 +188,8 @@ export class JobManager {
       if (running && this.jobs.get(running) && !TERMINAL.has(this.jobs.get(running)!.status)) return this.public(this.jobs.get(running)!);
     }
 
+    // Over its limit, a connection runs nothing new (cached answers above cost nothing and still show).
+    this.checkUsage(plan);
     await this.authorize(plan, req);
     // An identical request may have started while this one waited for approval.
     if (!req.force) {
@@ -271,6 +273,47 @@ export class JobManager {
     return this.get(job.id);
   }
 
+  /** The connection a run uses and pays with: Pi's model connection, or the one whose key an external CLI gets. */
+  private usageProvider(plan: JobPlan): ProviderConfig | undefined {
+    const id = plan.runner === 'direct' ? plan.provider.id : (plan.provider?.id ?? plan.harness.keyFromProvider);
+    return id ? this.settings().providers.find((p) => p.id === id) : undefined;
+  }
+
+  private checkUsage(plan: JobPlan): void {
+    const p = this.usageProvider(plan);
+    if (!p) return;
+    const s = this.deps.store.usage.status(this.settings(), p.id);
+    if (s.ratio === undefined || s.ratio < 1) return;
+    const used = s.limit!.usd && s.usd >= s.limit!.usd ? `$${s.usd.toFixed(2)} of $${s.limit!.usd.toFixed(2)}` : `${s.tokens.toLocaleString('en')} of ${s.limit!.tokens.toLocaleString('en')} tokens`;
+    const until = new Date(s.resetsAt).toLocaleDateString('en', { month: 'short', day: 'numeric' });
+    throw new JobRejected(
+      `"${p.label}" has reached its usage limit for this ${s.period} (${used}). Raise it in Settings → Models & effort → Usage limits, or wait until ${until}.`,
+    );
+  }
+
+  /** A run's budget, never more than the dollars left in its connection's limit. */
+  private budgetFor(plan: JobPlan, base: number): number {
+    const p = this.usageProvider(plan);
+    const left = p ? this.deps.store.usage.remainingUsd(this.settings(), p.id) : undefined;
+    if (left === undefined) return base;
+    // 0 means "no budget" to Pi: a tiny amount stops it at the first reply instead.
+    const cap = Math.max(left, 0.0001);
+    return base > 0 ? Math.min(base, cap) : cap;
+  }
+
+  private recordUsage(plan: JobPlan, use: { usd?: number; tokens?: number; priced: boolean }): void {
+    const p = this.usageProvider(plan);
+    if (p) this.deps.store.usage.record(p.id, use);
+  }
+
+  /** Said on the card once a connection has used 80% of its limit. */
+  private usageNote(plan: JobPlan): string | undefined {
+    const p = this.usageProvider(plan);
+    const s = p && this.deps.store.usage.status(this.settings(), p.id);
+    if (!p || !s || s.ratio === undefined || s.ratio < 0.8) return undefined;
+    return `${p.label}: ${Math.min(100, Math.round(s.ratio * 100))}% of this ${s.period}'s usage limit used`;
+  }
+
   /** A copy of a finished result in the output folder chosen for its skill, if any. Never fails the job. */
   private saveCopy(plan: JobPlan, outputRoot: string, output: JobState['output']): Pick<JobRecord, 'savedTo' | 'saveError'> {
     const settings = this.settings();
@@ -292,6 +335,7 @@ export class JobManager {
       return;
     }
     const complete = !outcome.partial;
+    const usageNote = this.usageNote(plan);
     const saved = this.saveCopy(plan, this.outputRoot(job), output);
     this.update(
       id,
@@ -303,6 +347,7 @@ export class JobManager {
         costUsd: outcome.costUsd,
         finishedAt: Date.now(),
         ...saved,
+        ...(usageNote ? { usageNote } : {}),
         ...(output === 'markdown' ? { text: readOutputText(this.outputRoot(job), 'markdown') } : {}),
       },
       true,
@@ -382,7 +427,7 @@ export class JobManager {
         outputFile: OUTPUT_FILES.markdown,
         model: piModelSpec(plan.provider, plan.engine.model, plan.engine.effort, plan.engine.maxTokens),
         apiKey: this.key(plan.provider),
-        budgetUsd: 0,
+        budgetUsd: this.budgetFor(plan, 0),
         ...this.pictureFor(plan),
         demo: { skill: plan.skill.name, term: plan.context.term, lang: plan.explainLang, model: plan.engine.model, effort: plan.engine.effort, output: 'markdown', delayMs: demoDelay() },
       },
@@ -397,6 +442,7 @@ export class JobManager {
       },
       (line) => this.update(id, { progress: line }),
     );
+    this.recordUsage(plan, { usd: r.costUsd, tokens: r.tokens, priced: !!r.priced });
     if (r.stop === 'aborted' || signal.aborted) throw Object.assign(new Error('Cancelled'), { name: 'AbortError' });
     if (r.stop === 'complete') {
       writeOutput(workspace, 'markdown', r.text);
@@ -432,7 +478,7 @@ export class JobManager {
         outputFile: OUTPUT_FILES[plan.skill.output],
         model: piModelSpec(provider, plan.engine.model, plan.engine.effort, modelInfo(provider, plan.engine.model).maxOutputTokens ?? 32_000),
         apiKey: this.key(provider),
-        budgetUsd: plan.engine.budgetUsd,
+        budgetUsd: this.budgetFor(plan, plan.engine.budgetUsd),
         ...this.pictureFor(plan),
         demo: { skill: plan.skill.name, term: plan.context.term, lang: plan.explainLang, model: plan.engine.model, effort: plan.engine.effort, output: plan.skill.output, delayMs: demoDelay() },
       },
@@ -441,6 +487,7 @@ export class JobManager {
       () => {},
       (line) => this.update(id, { progress: line }),
     );
+    this.recordUsage(plan, { usd: r.costUsd, tokens: r.tokens, priced: !!r.priced });
     if (r.stop === 'aborted' || signal.aborted) throw Object.assign(new Error('Cancelled'), { name: 'AbortError' });
     // A result file counts even if the run ended badly afterwards (e.g. budget reached); it is still validated.
     const output = collectOutput(workspace, plan.skill.output, r.stop === 'complete' ? r.text : undefined);
@@ -531,6 +578,7 @@ export class JobManager {
       signal,
       onProgress: (line) => this.update(id, { progress: line }),
     });
+    if (res.costUsd !== undefined) this.recordUsage(plan, { usd: res.costUsd, priced: true });
     return { output: res.output, costUsd: res.costUsd };
   }
 
