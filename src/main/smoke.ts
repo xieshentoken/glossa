@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { runConnectionSmoke } from './connection-smoke';
 import path from 'node:path';
-import { net, session, webContents as allContents, type BrowserWindow } from 'electron';
+import { dialog, net, session, webContents as allContents, type BrowserWindow } from 'electron';
 import { WEB_PARTITION } from './web-security';
 import { piWorkers } from './runners/pi';
 import { PI_HARNESS } from '../shared/defaults';
@@ -234,6 +234,29 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
     throw new Error(`output protocol: ${res.status} ${body.slice(0, 200)}`);
   }
   log('ELI5 result served with CSP', src);
+
+  // --- Export as HTML: the save dialog answers as a user would (main side) -----------
+  const exportDir = path.join(dir, 'exported');
+  fs.mkdirSync(exportDir, { recursive: true });
+  const showSave = dialog.showSaveDialog;
+  const exportTo = async (name: string, card = LAST) => {
+    let asked: Electron.SaveDialogOptions | undefined;
+    (dialog as { showSaveDialog: unknown }).showSaveDialog = async (_w: unknown, o: Electron.SaveDialogOptions) => ((asked = o), { canceled: false, filePath: path.join(exportDir, name) });
+    try {
+      await js(`${card}.querySelector('[data-testid=export-html]').click()`);
+      const shown = await waitFor<string>('exported', `${card}.querySelector('[data-testid=exported-to]')?.title`);
+      return { shown, asked: asked! };
+    } finally {
+      (dialog as { showSaveDialog: unknown }).showSaveDialog = showSave;
+    }
+  };
+  await clickSkill('ELI5');
+  await waitFor('back to eli5', `${LAST}.querySelector('[data-testid=task-view]')?.dataset.skill === 'eli5'`);
+  const eli5Export = await exportTo('eli5.html');
+  const eli5Page = fs.readFileSync(path.join(exportDir, 'eli5.html'), 'utf8');
+  if (!eli5Page.startsWith('<!doctype html>') || !eli5Page.includes('offline sample explanation (eli5') || !eli5Page.includes('max-width: 46rem')) throw new Error(`exported ELI5 page: ${eli5Page.slice(0, 200)}`);
+  if (path.basename(eli5Export.asked.defaultPath ?? '') !== 'heat transfer coefficient - ELI5.html') throw new Error(`export suggested ${eli5Export.asked.defaultPath}`);
+  log('ELI5 exported as a standalone page;', eli5Export.shown);
 
   // --- agent skill on a Chinese term, in a second card ---------------------------
   // The first card would cover the text below it: minimize it first.
@@ -1007,6 +1030,49 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
     log('paper theme: cards on paper, answer rendered on paper with 2 formulas (KaTeX css and fonts served by the app), prices left as text');
   }
   log('theme toggle:', themeSeen.join(', '));
+
+  // --- a Claude Code session opened from the address bar --------------------------
+  const sid = '7d1c2a9e-4b3f-4c55-9a0e-2f6b8c1d3e4a';
+  const sessionFile = path.join(dir, 'claude-config', 'projects', '-work-app', `${sid}.jsonl`);
+  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+  fs.writeFileSync(
+    sessionFile,
+    [
+      { type: 'user', sessionId: sid, cwd: '/work/app', timestamp: '2026-10-18T08:00:00Z', message: { role: 'user', content: 'Explain the Reynolds number in the solver<system-reminder>hidden</system-reminder>' } },
+      { type: 'assistant', sessionId: sid, message: { model: 'claude-opus-5-5', role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Grep', input: { pattern: 'reynolds' } }] } },
+      { type: 'user', sessionId: sid, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'solver.py:12: re = rho * v * L / mu' }] } },
+      { type: 'assistant', sessionId: sid, message: { model: 'claude-opus-5-5', role: 'assistant', content: [{ type: 'text', text: 'The solver uses the **kinematic viscosity** to decide when flow turns turbulent.' }] } },
+    ].map((x) => JSON.stringify(x)).join('\n'),
+  );
+  process.env.CLAUDE_CONFIG_DIR = path.join(dir, 'claude-config');
+  const typeAddress = (text: string) =>
+    js(`(() => { const f = document.querySelector('form.urlbar'); f.querySelector('input').value = ${JSON.stringify(text)}; f.requestSubmit(); })()`);
+  await typeAddress(`claude --resume ${sid}`);
+  await waitFor('session document', `document.querySelector('.reader.active .html-doc[data-kind=session]')?.textContent.includes('kinematic viscosity')`);
+  const sessionShown = await js<{ kind: string; title: string; turns: string[]; tools: number; hidden: boolean }>(`(() => {
+    const doc = document.querySelector('.reader.active .html-doc');
+    return {
+      kind: document.querySelector('.tab.on .tab-kind').textContent,
+      title: document.querySelector('.tab.on').textContent,
+      turns: [...doc.querySelectorAll('section > h2')].map((h) => h.textContent),
+      tools: doc.querySelectorAll('details').length,
+      hidden: doc.textContent.includes('hidden'),
+    };
+  })()`);
+  if (sessionShown.kind !== 'CHAT' || sessionShown.turns.join() !== 'You,Claude' || sessionShown.tools !== 1 || sessionShown.hidden || !sessionShown.title.includes('Explain the Reynolds number')) throw new Error(`session view: ${JSON.stringify(sessionShown)}`);
+  // Terms are picked in a session like in any document.
+  const sessionCards = await js<number>(`${CARDS}.length`);
+  await pickWithMouse('.reader.active .html-doc', 'kinematic');
+  key('Return');
+  const sessionTerm = await newCardTerm(sessionCards);
+  if (!sessionTerm.startsWith('kinematic')) throw new Error(`session pick gave "${sessionTerm}"`);
+  await shoot('12-session');
+  key('Escape');
+  await typeAddress('11111111-2222-3333-4444-555555555555');
+  const missing = await waitFor<string>('missing session error', `document.querySelector('.error-bar')?.textContent`);
+  if (!missing.includes('No Claude Code or Codex session')) throw new Error(`missing session: ${missing}`);
+  await js(`document.querySelector('.error-bar button')?.click()`);
+  log('Claude Code session opened from "claude --resume <id>": turns, folded tool call, term picked; unknown id explained');
 
   // --- settings window ----------------------------------------------------------
   key('Escape');

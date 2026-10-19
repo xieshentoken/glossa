@@ -8,6 +8,7 @@ import mammoth from 'mammoth';
 import { marked } from 'marked';
 import type { LoadedDoc } from '../shared/api';
 import type { DocInfo, DocKind } from '../shared/types';
+import { readSessionFile, sessionPage, sniffSessionFile } from './sessions';
 
 /** Source code and data files, shown as numbered lines. */
 export const CODE_EXTS = [
@@ -16,7 +17,7 @@ export const CODE_EXTS = [
   'css', 'scss', 'sass', 'less', 'sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd',
   'c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'hh', 'cs', 'java', 'kt', 'kts', 'scala', 'groovy', 'gradle', 'go', 'rs', 'swift', 'm', 'mm',
   'rb', 'php', 'pl', 'pm', 'lua', 'r', 'jl', 'dart', 'ex', 'exs', 'erl', 'hs', 'clj', 'cljs', 'elm', 'fs', 'fsx', 'ml', 'nim', 'zig', 'v',
-  'sql', 'graphql', 'gql', 'proto', 'tf', 'hcl', 'cmake', 'mk', 'dockerfile', 'tex', 'bib', 'rst', 'csv', 'tsv', 'log', 'diff', 'patch',
+  'sql', 'graphql', 'gql', 'proto', 'tf', 'hcl', 'cmake', 'mk', 'dockerfile', 'tex', 'bib', 'rst', 'csv', 'tsv', 'log', 'diff', 'patch', 'jsonl', 'ndjson',
 ];
 
 export const FILE_KINDS: Record<string, DocKind> = {
@@ -87,10 +88,12 @@ export class DocumentService {
     const st = await fs.promises.stat(file);
     if (!st.isFile()) throw new Error('Not a file');
     if (st.size > MAX_DOC_BYTES) throw new Error(`The file is too large (${Math.round(st.size / 1048576)} MB).`);
+    // A Claude Code or Codex session is shown as a conversation; other JSON Lines as code.
+    const session = path.extname(file).toLowerCase() === '.jsonl' ? await sniffSessionFile(file) : undefined;
     const info: DocInfo = {
       docId: await hashFile(file),
-      kind,
-      title: path.basename(file),
+      kind: session ? 'session' : kind,
+      title: session?.title ?? path.basename(file),
       source: file,
       openedAt: Date.now(),
     };
@@ -143,6 +146,11 @@ export class DocumentService {
         const st = await fs.promises.stat(info.source);
         if (st.size > MAX_CODE_BYTES) throw new Error(`This file is too large to show as code (${Math.round(st.size / 1048576)} MB, at most ${MAX_CODE_BYTES / 1048576} MB).`);
         return { kind: 'code', text: codeText(info.source, (await fs.promises.readFile(info.source, 'utf8')).replace(/^\uFEFF/, '')) };
+      }
+      case 'session': {
+        const session = await sniffSessionFile(info.source);
+        if (!session) throw new Error('This file is no longer a Claude Code or Codex session.');
+        return { kind: 'html', ...(await sessionPage(await readSessionFile(info.source, session.agent))) };
       }
       case 'text': {
         const txt = await fs.promises.readFile(info.source, 'utf8');

@@ -300,6 +300,8 @@ function TaskView(props: { task: CardTask; job?: JobState; theme: ViewTheme; t: 
   const working = status === 'running' || status === 'queued';
   // Rendered (Markdown or HTML, in the script-free viewer) or the explanation as plain text.
   const [plain, setPlain] = useState(false);
+  // The page written by Export, or why it failed.
+  const [exported, setExported] = useState<{ path?: string; error?: string }>();
   const plainText = usePlainText(plain && (status === 'done' || status === 'partial') ? job : undefined);
 
   useEffect(() => {
@@ -336,6 +338,12 @@ function TaskView(props: { task: CardTask; job?: JobState; theme: ViewTheme; t: 
               {t('savedTo')}: {job.savedTo.split(/[\\/]/).slice(-2).join('/')}
             </button>
           )}
+          {exported?.path && (
+            <div className="pill-sub exported" title={`${t('exportedTo')}: ${exported.path}`} data-testid="exported-to">
+              {t('exportedTo')}: {exported.path.split(/[\\/]/).slice(-2).join('/')}
+            </div>
+          )}
+          {exported?.error && <div className="pill-sub error-text" title={exported.error}>{t('exportFailed')}: {exported.error}</div>}
           {job?.usageNote && <div className="pill-sub usage-note" data-testid="usage-note">{job.usageNote}</div>}
           {viewable && job?.saveError && <div className="pill-sub error-text" title={job.saveError}>{t('notSaved')}</div>}
         </div>
@@ -349,6 +357,22 @@ function TaskView(props: { task: CardTask; job?: JobState; theme: ViewTheme; t: 
             onClick={() => setPlain((v) => !v)}
           >
             <Icon name={plain ? 'code' : 'text'} size={15} />
+          </button>
+        )}
+        {viewable && job && (
+          <button
+            className="icon"
+            title={t('exportHtml')}
+            aria-label={t('exportHtml')}
+            data-testid="export-html"
+            onClick={() =>
+              void api.jobs.exportHtml(job.id, props.theme).then(
+                (p) => p && setExported({ path: p }),
+                (err: Error) => setExported({ error: String(err.message ?? err).replace(/^Error invoking remote method '[^']+': (\w+: )?/, '') }),
+              )
+            }
+          >
+            <Icon name="export" size={15} />
           </button>
         )}
         {working ? (

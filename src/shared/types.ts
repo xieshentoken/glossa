@@ -331,7 +331,8 @@ export interface TermCard {
 }
 
 /** 'code': source code and data files (Python, JSON, YAML …), shown as monospaced lines. */
-export type DocKind = 'web' | 'pdf' | 'docx' | 'markdown' | 'text' | 'html' | 'code';
+/** 'session': a Claude Code or Codex session (.jsonl), shown as a conversation. */
+export type DocKind = 'web' | 'pdf' | 'docx' | 'markdown' | 'text' | 'html' | 'code' | 'session';
 
 export interface DocInfo {
   docId: string;

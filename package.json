@@ -3,12 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "description": "A reader that explains difficult terms in place.",
+  "author": "xieshentoken",
   "main": "dist/main/main.js",
   "license": "UNLICENSED",
   "scripts": {
     "build": "node scripts/build.mjs",
     "dev": "node scripts/build.mjs --dev",
     "start": "npm run build && electron .",
+    "icons": "swift scripts/make-icons.swift && iconutil -c icns build/icon.iconset -o build/icon.icns",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "smoke": "npm run build && node scripts/smoke.mjs"
@@ -30,9 +34,73 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "electron": "^44.8.0",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
     "vitest": "^5.0.5"
+  },
+  "build": {
+    "appId": "com.xieshentoken.glossa",
+    "productName": "Glossa",
+    "copyright": "Copyright © 2026 Glossa",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "builtin-skills/**/*",
+      "assets/icon.png",
+      "package.json"
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "identity": "-"
+    },
+    "dmg": {
+      "title": "Glossa ${version}",
+      "contents": [
+        {
+          "x": 140,
+          "y": 200,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "artifactName": "Glossa-Setup-${version}-${arch}.${ext}"
+    }
   }
 }

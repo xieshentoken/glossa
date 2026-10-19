@@ -741,7 +741,7 @@ function kindIcon(d: Pick<DocInfo, 'kind' | 'source'>): string {
     const ext = name.includes('.') && !name.startsWith('.') ? name.split('.').at(-1)! : name.replace(/^\./, '');
     return ext.slice(0, 4).toUpperCase() || 'CODE';
   }
-  return { web: 'WEB', pdf: 'PDF', docx: 'DOC', markdown: 'MD', text: 'TXT', html: 'HTML' }[d.kind];
+  return { web: 'WEB', pdf: 'PDF', docx: 'DOC', markdown: 'MD', text: 'TXT', html: 'HTML', session: 'CHAT' }[d.kind];
 }
 
 const THEME_LABEL = { system: 'themeSystem', light: 'light', dark: 'dark', paper: 'themePaper' } as const;

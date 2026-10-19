@@ -25,6 +25,7 @@ import {
   type TermLocator,
   type CardCapture,
   type Region,
+  type ViewTheme,
 } from '../shared/types';
 
 export class InvalidArgument extends Error {
@@ -86,6 +87,10 @@ export const vModel = (v: unknown) => str(v, 'model', 200, MODEL);
 
 export function vUrl(v: unknown): string {
   return str(v, 'address', 4000);
+}
+
+export function vViewTheme(v: unknown): ViewTheme {
+  return oneOf(v, 'theme', ['light', 'dark', 'paper'] as const);
 }
 
 export function vAbsPath(v: unknown): string {

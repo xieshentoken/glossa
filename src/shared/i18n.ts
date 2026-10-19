@@ -3,7 +3,7 @@ import type { UiLang } from './types';
 const en = {
   appName: 'Glossa',
   openFile: 'Open file',
-  openUrlPlaceholder: 'Enter a web address and press Enter',
+  openUrlPlaceholder: 'Enter a web address, or a Claude Code / Codex session ID, and press Enter',
   settings: 'Settings',
   close: 'Close',
   cancel: 'Cancel',
@@ -244,6 +244,9 @@ const en = {
   working: "Working on it",
   almostDone: "Finishing",
   themePaper: "Paper",
+  exportHtml: "Export as HTML…",
+  exportedTo: "Exported",
+  exportFailed: "Export failed",
 };
 
 export type MessageKey = keyof typeof en;
@@ -251,7 +254,7 @@ type Dict = Record<MessageKey, string>;
 
 const de: Partial<Dict> = {
   openFile: 'Datei öffnen',
-  openUrlPlaceholder: 'Webadresse eingeben und Enter drücken',
+  openUrlPlaceholder: 'Webadresse oder Claude-Code-/Codex-Sitzungs-ID eingeben und Enter drücken',
   settings: 'Einstellungen',
   close: 'Schließen',
   cancel: 'Abbrechen',
@@ -489,11 +492,14 @@ const de: Partial<Dict> = {
   working: "In Arbeit",
   almostDone: "Wird abgeschlossen",
   themePaper: "Papier",
+  exportHtml: "Als HTML exportieren…",
+  exportedTo: "Exportiert",
+  exportFailed: "Export fehlgeschlagen",
 };
 
 const fr: Partial<Dict> = {
   openFile: 'Ouvrir un fichier',
-  openUrlPlaceholder: 'Saisissez une adresse web puis Entrée',
+  openUrlPlaceholder: 'Saisissez une adresse web ou un ID de session Claude Code / Codex puis Entrée',
   settings: 'Réglages',
   close: 'Fermer',
   cancel: 'Annuler',
@@ -731,11 +737,14 @@ const fr: Partial<Dict> = {
   working: "En cours",
   almostDone: "Finalisation",
   themePaper: "Papier",
+  exportHtml: "Exporter en HTML…",
+  exportedTo: "Exporté",
+  exportFailed: "Échec de l’export",
 };
 
 const zh: Partial<Dict> = {
   openFile: '打开文件',
-  openUrlPlaceholder: '输入网址后按回车',
+  openUrlPlaceholder: '输入网址，或 Claude Code / Codex 会话 ID，然后按回车',
   settings: '设置',
   close: '关闭',
   cancel: '取消',
@@ -973,6 +982,9 @@ const zh: Partial<Dict> = {
   working: "处理中",
   almostDone: "即将完成",
   themePaper: "纸张",
+  exportHtml: "导出为 HTML…",
+  exportedTo: "已导出",
+  exportFailed: "导出失败",
 };
 
 const DICTS: Record<UiLang, Partial<Dict>> = { en, de, fr, zh };

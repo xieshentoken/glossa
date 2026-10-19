@@ -15,8 +15,13 @@ export function documentedModel(preset: ProviderPresetId, id: string): ModelInfo
     else if (/^o[134](-mini)?(-\d{4}-\d{2}-\d{2})?$/.test(id)) { efforts = ['low', 'medium', 'high']; known = true; }
     else if (/^gpt-(4|3\.5)/.test(id)) known = true;
   } else if (preset === 'anthropic') {
-    if (/^claude-opus-4-6(-\d{8})?$/.test(id)) { efforts = ['low', 'medium', 'high', 'max']; known = true; }
-    else if (/^claude-(sonnet-4-6|opus-4-5)(-\d{8})?$/.test(id)) { efforts = ['low', 'medium', 'high']; known = true; }
+    // Effort is output_config.effort. Reviewed 2026-10-18 against Anthropic's model reference; the
+    // Models API's capabilities.effort (when the endpoint returns it) takes priority over this table.
+    if (/^claude-(fable-5(-1)?|mythos-5(-1)?|opus-5(-5)?|opus-4-[78]|sonnet-5(-5)?|haiku-5-5)(-\d{8})?$/.test(id)) { efforts = ['low', 'medium', 'high', 'xhigh', 'max']; known = true; }
+    else if (/^claude-(opus|sonnet)-4-6(-\d{8})?$/.test(id)) { efforts = ['low', 'medium', 'high', 'max']; known = true; }
+    else if (/^claude-opus-4-5(-\d{8})?$/.test(id)) { efforts = ['low', 'medium', 'high']; known = true; }
+    // These models reject the effort parameter.
+    else if (/^claude-(sonnet|haiku)-4-5(-\d{8})?$/.test(id)) known = true;
   } else if (preset === 'deepseek' && /^(deepseek-flash|deepseek-v4(-pro|-flash)?)$/.test(id)) {
     efforts = ['none', 'low', 'high', 'max']; thinking = 'effort'; known = true;
   } else if ((preset === 'glm-cn' || preset === 'zai') && /^glm-(4\.[567]|5(\.[123])?)(-flash|-air|-airx)?$/.test(id)) {
@@ -35,7 +40,14 @@ export function documentedModel(preset: ProviderPresetId, id: string): ModelInfo
 }
 
 export function modelInfo(cfg: ProviderConfig, id: string): ModelInfo {
-  return cfg.models?.find((m) => m.id === id) ?? documentedModel(inferPreset(cfg), id);
+  const saved = cfg.models?.find((m) => m.id === id);
+  // A connection tested before its model was documented (or whose endpoint reported nothing) keeps
+  // "unknown"; documentation known now is used without testing it again. Levels the API reported win.
+  if (saved?.effortSource === 'unknown') {
+    const doc = documentedModel(inferPreset(cfg), id);
+    if (doc.effortSource === 'documented') return { ...saved, efforts: doc.efforts, effortSource: 'documented', ...(doc.thinking ? { thinking: doc.thinking } : {}) };
+  }
+  return saved ?? documentedModel(inferPreset(cfg), id);
 }
 
 /** Validate in the main process too, so a stale UI cannot send an unsupported value. */

@@ -6,10 +6,11 @@ import type { ReactElement } from 'react';
 export type IconName =
   | 'close' | 'minimize' | 'maximize' | 'restore' | 'stop' | 'retry' | 'settings' | 'tasks'
   | 'sun' | 'moon' | 'system' | 'clock' | 'more' | 'open' | 'alert' | 'check'
-  | 'plus' | 'up' | 'down' | 'back' | 'forward' | 'edit' | 'text' | 'code' | 'layout1' | 'layout2' | 'layout3' | 'locate' | 'folder' | 'scan' | 'paper';
+  | 'plus' | 'up' | 'down' | 'back' | 'forward' | 'edit' | 'text' | 'code' | 'layout1' | 'layout2' | 'layout3' | 'locate' | 'folder' | 'scan' | 'paper' | 'export';
 
 const PATHS: Record<IconName, ReactElement> = {
   close: <path d="M18 6 6 18M6 6l12 12" />,
+  export: <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />,
   minimize: <path d="M5 12h14" />,
   maximize: <rect x="4" y="4" width="16" height="16" rx="2" />,
   restore: (

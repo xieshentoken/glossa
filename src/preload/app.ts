@@ -60,6 +60,7 @@ const api: GlossaApi = {
     get: (id) => invoke(IPC.jobsGet, id),
     outputText: (id) => invoke(IPC.jobsOutputText, id),
     showSaved: (id) => invoke(IPC.jobsShowSaved, id),
+    exportHtml: (id, theme) => invoke(IPC.jobsExportHtml, id, theme),
     onEvent: (cb) => {
       const l = (_e: unknown, job: JobState) => cb(job);
       ipcRenderer.on(IPC.jobsEvent, l);

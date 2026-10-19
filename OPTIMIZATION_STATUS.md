@@ -1,13 +1,33 @@
 # Glossa 稳定化记录（P0 / P1，2026-10-17）
 
-## v2.5 发布检查（2026-10-19，macOS arm64）
+## v2.6 发布检查（2026-10-19，macOS arm64）
 
-- **隐私清理**：移除文档中的机器专属绝对路径（本机临时目录、只读基线快照路径）；安全测试中的密钥形状字符串统一为明确的合成凭据（`sk-synthetic-test-only-…`）。对源码、文档、测试与夹具全树扫描，未发现真实凭据、个人主机名、账号或密码；保留上游作者 / 许可证信息与有意设计的负面测试（如 `sk-secret-123` 的日志脱敏用例）。
-- **修复**：合并 v2.4 发布中已验证的“API 发现思考强度”映射到本快照（`pi-model.ts`：已保存连接按连接测试发现的能力发送所选强度，服务商默认仍不附加该参数），并恢复对应的真实 worker + 本地 HTTP 夹具回归测试；去掉该修复时该用例会失败。
-- **不在发布范围**：依赖、构建产物、用户配置、密钥、任务结果、截图与本机备份；上述路径已由 `.gitignore` 覆盖。
-- **验证 PASS**：`npm run typecheck`；22 个测试文件 / 275 项；`npm run build`；macOS Electron 启动后阅读器窗口与界面正常加载。
+- **隐私清理**：移除文档中的机器专属绝对路径（本机临时目录、只读基线快照路径）；安全测试中的密钥形状字符串统一为明确的合成凭据（`sk-synthetic-test-only-…`）。对源码、文档、测试与夹具全树扫描，未发现真实凭据、个人主机名、邮箱、账号或电话类标识；保留上游作者 / 许可证信息与有意设计的负面测试（如 `sk-secret-123` 的日志脱敏用例）。
+- **修复**：合并 v2.4 发布中已验证的“API 发现思考强度”映射（`pi-model.ts`：已保存连接按连接测试发现的能力发送所选强度，服务商默认仍不附加该参数），并恢复真实 worker + 本地 HTTP 夹具回归测试；去掉该修复时该用例失败。
+- **应用图标**：`assets/icon.png`（1024，窗口与 macOS Dock）、`build/icon.icns`、`build/icon.ico`。生成脚本 `scripts/make-icons.swift` 按 Apple 图标网格（主体 824/1024、圆角、软阴影）从项目根目录的方形 `logo.png` 生成；原始 logo 素材不随源码发布，已生成的图标随仓库提供。
+- **可分发安装包**：`electron-builder` 配置随 `package.json` 提供（`npm run dist:mac` / `npm run dist:win`），产出 macOS dmg（arm64 / x64）与 Windows NSIS（x64）；产物目录 `release/` 不入库。
+- **验证 PASS**：`npm run typecheck`；23 个测试文件 / 290 项；`npm run build`；开发态 Electron 冒烟两阶段；打包后的 macOS 应用冒烟 phase 1 全通过。
 - **依赖审计沿用 OPEN**：`npm audit` 报告 3 条中危、0 条高危 / 严重，来自同一条 `mammoth → argparse → sprintf-js` 依赖链（[GHSA-hp3w-g68c-fv3c](https://github.com/advisories/GHSA-hp3w-g68c-fv3c)）；依赖锁定不变，跟进上游修复。
-- **边界**：未调用真实模型 / 付费账户；静态扫描不能证明不存在任何未知形式的敏感信息。
+- **边界**：安装包为 ad-hoc 签名（无 Developer ID 与公证）、Windows 包未签名，分发时系统会给出提示；未调用真实模型 / 付费账户；静态扫描不能证明不存在任何未知形式的敏感信息。
+
+<!-- round7-checkpoint:start -->
+## 第七轮：Agent 会话文档、卡片导出 HTML（2026-10-19，Linux arm64 无界面副本）
+
+- **会话文档**：新文档类型 `session`（标签 CHAT），`src/main/sessions.ts`。`.jsonl` 打开时读取前 1 MB 判断格式：Claude Code（含 `sessionId` 的 user/assistant 行）、Codex（`session_meta` / `response_item` 包装格式，以及 2025 年中以前的无包装格式），其余 `.jsonl` / `.ndjson` 按源代码显示。逐行流式读取，以对话呈现：每轮一节（You / Claude 或 Codex），工具调用折叠为 `<details>`（标题为命令 / 文件 / 模式 / 查询），工具输入与输出各截至 4000 字；不显示 thinking / reasoning、`isMeta` 行、子 Agent（`isSidechain`）行、`<system-reminder>` 等注入内容、Codex 的 developer 消息与 `<environment_context>` / AGENTS.md 注入。标题为首条用户提示（打开时即设定）。交给技能的全文只含对话文字，不含工具输出。HTML 仍经渲染进程的白名单清理。
+- **从地址栏打开会话**：`claude --resume|-r|--session-id <id>`、`codex [exec] resume <id>` 或单独的 UUID → 在 `CLAUDE_CONFIG_DIR/projects`、`~/.claude/projects`、`CODEX_HOME` / `~/.codex` 的 `sessions`（YYYY/MM/DD）与 `archived_sessions` 中查找；找不到时说明查找过的位置。含 ID 的网址仍按网页打开。打开文件对话框新增“Claude Code and Codex sessions”筛选。
+- **导出为 HTML**：结果栏新增导出按钮（下载图标）→ IPC `jobs:exportHtml(jobId, theme)` → 主进程保存对话框（默认位置：该技能的输出文件夹或“文稿”，文件名 `<术语> - <技能>.html`；路径只来自对话框）。Markdown 结果（含 ELI5 的 HTML 回答）导出为与卡片相同主题的独立页面（居中版式；有公式时 KaTeX 样式与 woff2 字体以 data URL 内嵌，页面不引用应用内地址）；HTML 结果（Anatomy）单文件原样复制，带附属文件时复制为与所选文件同名的文件夹（已存在则加 “ (2)”）。卡片显示“已导出”及路径，失败显示原因。
+- **验证**：`npm run typecheck` PASS；`npm test` 23 个文件 / 289 项 PASS（新增 `test/sessions-export.test.ts` 11 项）；`npm run build` PASS；Electron 冒烟两次启动 PASS（新增：ELI5 经真实按钮导出为独立页面且默认文件名正确；地址栏输入 `claude --resume <id>` 打开会话，标签 CHAT、标题、两轮、一个折叠工具调用、提醒内容不显示，在会话中 Alt+Q 取词生成卡片；未知 ID 显示说明）。另用本机 4 个真实 Claude Code 会话（7.6–29 MB）核对：工具调用与结果全部配对，29 MB 约 0.4 秒。截图：`../.checkpoints/feat8-20261019-003732/shots/12-session.png`、`2-card-results.png`。
+- **NOT RUN / 限制**：真实 Codex 会话文件（本机未安装 Codex，格式按已知结构以测试数据验证）；保存对话框本身（无界面环境，冒烟在主进程侧替换对话框结果）；导出 Anatomy 真实结果（冒烟仅导出 ELI5，HTML 结果的复制由单元测试覆盖）；macOS / Windows。文档 ID 为内容哈希，仍在进行的会话增长后重新打开会成为新文档，之前的卡片不随之显示。网页会话链接不做特殊处理。
+- **快照**：改前 `../.checkpoints/feat8-20261019-003732/before.tar.gz`，完成 `done.tar.gz`。
+<!-- round7-checkpoint:end -->
+
+<!-- effort-fix:start -->
+## 修复：思考强度（effort）无法识别（2026-10-18）
+
+- **原因**：① 当接口未返回 `capabilities`（`null`，或代理 / 中转地址不提供）时，退回内置的“文档记载”表，而该表只含 `claude-opus-4-6` / `claude-sonnet-4-6` / `claude-opus-4-5`，当前 Claude 模型（含 Glossa 默认的 `claude-opus-5-5`、`claude-haiku-5-5`）一律为“未知”、无可选强度；内置旧连接上的默认 `claude-haiku-5-5` + `low` 甚至会被 Pi 拒绝。② 连接保存的是测试当时的模型信息，旧连接即使之后表格更新也一直显示“未知”。接口返回 `capabilities.effort.<level>.supported` 时（已对照 Anthropic Models API 文档核对字段）识别本来正常。
+- **修复**：按 Anthropic 官方模型资料更新 Anthropic 表（Fable 5/5.1、Mythos 5/5.1、Opus 5.5/5/4.8/4.7、Sonnet 5.5/5、Haiku 5.5：low–max；Opus/Sonnet 4.6：low/medium/high/max；Opus 4.5：low/medium/high；Sonnet/Haiku 4.5：不支持 effort）；`modelInfo` 对保存为“未知”的模型改用现有文档信息（接口报告的级别仍优先），旧连接无需重新测试。未采用 Pi 目录作为来源（其 `thinkingLevelMap` 为部分映射，语义不明确，易误判）。
+- **验证**：`npm test` 22 个文件 / 278 项 PASS（新增 4 项：文档字段布局、无 capabilities 时各型号的文档级别、旧连接刷新且接口级别优先、默认配置被 Pi 接受）；`npm run build` PASS；Electron 冒烟两次启动 PASS。**NOT RUN**：对真实 Anthropic / 其他服务商接口的连接测试（本机无密钥且拒绝回环）；其他服务商（OpenAI、Gemini、Grok、GLM、Kimi、DeepSeek）的文档表未在本次更新。
+<!-- effort-fix:end -->
 
 <!-- round6-checkpoint:start -->
 ## 第六轮：LaTeX 公式、固定卡片尺寸、纸张主题（2026-10-18，Linux arm64 无界面副本）

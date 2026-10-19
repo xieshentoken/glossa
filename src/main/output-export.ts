@@ -10,8 +10,10 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import type { OutputKind, Settings } from '../shared/types';
-import { copyTreeSafe, hashTree, readFileSafe, writeFileAtomic } from './fs-safe';
+import { hasMath } from '../shared/math';
+import type { OutputKind, Settings, ViewTheme } from '../shared/types';
+import { copyTreeSafe, hashTree, readFileSafe, tryReadFileSafe, writeFileAtomic } from './fs-safe';
+import { markdownPage } from './output';
 import { OUTPUT_SPECS } from './output-contract';
 
 /** The folder a skill's results go to; '' = not saved. */
@@ -57,4 +59,45 @@ export function exportResult(o: { dir: string; outputRoot: string; output: Outpu
     if (single ? st.isFile() && fs.readFileSync(target).equals(main) : st.isDirectory() && hashTree(target) === tree) return target;
   }
   throw new Error('Too many copies of this result in the output folder.');
+}
+
+/** KaTeX's stylesheet with its fonts inlined, so an exported page shows formulas anywhere. */
+export function inlineKatexCss(katexDir: string): string {
+  const css = readFileSafe(katexDir, 'katex.min.css', { maxBytes: 2 * 1024 * 1024 }).toString('utf8');
+  return css.replace(/url\(fonts\/([\w-]+)\.woff2\) format\("woff2"\)(?:,url\(fonts\/[\w-]+\.(?:woff|ttf)\) format\("(?:woff|truetype)"\))*/g, (all, name: string) => {
+    const font = tryReadFileSafe(katexDir, `fonts/${name}.woff2`, { maxBytes: 2 * 1024 * 1024 });
+    return font ? `url(data:font/woff2;base64,${font.toString('base64')}) format("woff2")` : all;
+  });
+}
+
+/**
+ * A result saved as a web page at a path the user chose (Export on the card).
+ * Markdown results become the page shown on the card, standalone; an HTML result
+ * is copied as it is, as a folder when it has files next to it. Returns the page written.
+ */
+export async function exportHtml(o: { outputRoot: string; output: OutputKind; target: string; theme: ViewTheme; lang: string; title: string; katexDir: string }): Promise<string> {
+  if (!path.isAbsolute(o.target)) throw new Error('The export path is not an absolute path.');
+  const target = /\.html?$/i.test(o.target) ? o.target : `${o.target}.html`;
+  const spec = OUTPUT_SPECS[o.output];
+  const main = readFileSafe(o.outputRoot, spec.file, { maxBytes: spec.maxBytes });
+  if (o.output === 'markdown') {
+    const md = main.toString('utf8');
+    const page = await markdownPage(md, { theme: o.theme, lang: o.lang, title: o.title, standalone: true, katexCss: hasMath(md) ? inlineKatexCss(o.katexDir) : undefined });
+    writeFileAtomic(target, page);
+    return target;
+  }
+  const resultDir = path.join(o.outputRoot, path.dirname(spec.file));
+  if (fs.readdirSync(resultDir).every((f) => f === path.basename(spec.file))) {
+    writeFileAtomic(target, main);
+    return target;
+  }
+  // Its pictures and scripts are found next to it: the whole folder, named like the chosen file.
+  const base = target.replace(/\.html?$/i, '');
+  for (let i = 1; i <= 100; i++) {
+    const dir = i === 1 ? base : `${base} (${i})`;
+    if (fs.existsSync(dir)) continue;
+    copyTreeSafe(resultDir, dir);
+    return path.join(dir, path.basename(spec.file));
+  }
+  throw new Error('Too many folders with this name.');
 }

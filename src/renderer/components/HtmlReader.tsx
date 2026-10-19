@@ -75,6 +75,7 @@ export function HtmlReader(props: {
     <article
       ref={articleRef}
       className="html-doc"
+      data-kind={doc.kind}
       lang={state.lang}
       style={{ zoom: props.zoom }}
       onClick={(e) => {

@@ -10,13 +10,16 @@ import { IPC } from '../shared/api';
 import type { DocInfo } from '../shared/types';
 import { CODE_EXTS, DocumentService, FILE_KINDS } from './documents';
 import { probeHarness } from './harness-probe';
+import { exportHtml, outputDirFor, safeName } from './output-export';
+import { findSessionFile, sessionRef } from './sessions';
 import { errorMessage, type JobManager } from './jobs';
 import { MAX_CAPTURE_SIDE } from './captures';
 import { createProvider } from './providers';
+import { skillLabel } from '../shared/skills';
 import { authorizeSettingsPatch, type GrantConfirm } from './settings-policy';
 import type { SkillRegistry } from './skills';
 import type { Store } from './store';
-import { str, vAbsPath, vCaptureId, vCaptureRect, vDocId, vJobId, vJobRequest, vModel, vParsedSkill, vProviderId, vSettingsPatch, vSkillName, vTermCards, vUrl } from './validate';
+import { str, vAbsPath, vCaptureId, vCaptureRect, vDocId, vJobId, vJobRequest, vModel, vParsedSkill, vProviderId, vSettingsPatch, vSkillName, vTermCards, vUrl, vViewTheme } from './validate';
 
 export interface IpcDeps {
   win: () => BrowserWindow | null;
@@ -26,6 +29,8 @@ export interface IpcDeps {
   jobs: JobManager;
   confirmGrant: GrantConfirm;
   webviewPreload: string;
+  /** KaTeX's stylesheet and fonts, inlined into exported pages with formulas. */
+  katexDir: string;
 }
 
 export function registerIpc(d: IpcDeps): void {
@@ -141,6 +146,7 @@ export function registerIpc(d: IpcDeps): void {
         { name: 'All supported files', extensions: Object.keys(FILE_KINDS).map((e) => e.slice(1)) },
         { name: 'Documents', extensions: ['pdf', 'docx', 'md', 'markdown', 'txt', 'html', 'htm'] },
         { name: 'Source code and data', extensions: [...CODE_EXTS, 'html', 'htm'] },
+        { name: 'Claude Code and Codex sessions', extensions: ['jsonl'] },
       ],
     });
     if (r.canceled) return [];
@@ -150,7 +156,12 @@ export function registerIpc(d: IpcDeps): void {
   });
   // Drag and drop: the user chose the file; only supported document types are opened.
   handle(IPC.docsOpenPath, async (file) => remember(await docs.describeFile(path.resolve(vAbsPath(file)))));
-  handle(IPC.docsOpenUrl, (url) => remember(docs.describeUrl(vUrl(url))));
+  // A Claude Code / Codex resume command or session id opens that session's transcript.
+  handle(IPC.docsOpenUrl, async (url) => {
+    const input = vUrl(url);
+    const ref = sessionRef(input);
+    return remember(ref ? await docs.describeFile(findSessionFile(ref)) : docs.describeUrl(input));
+  });
   handle(IPC.docsReopen, async (raw) => {
     const info = raw as DocInfo;
     if (!info || typeof info !== 'object') throw new Error('Invalid document');
@@ -197,6 +208,25 @@ export function registerIpc(d: IpcDeps): void {
     const p = jobs.savedCopy(vJobId(id));
     if (p) shell.showItemInFolder(p);
     return !!p;
+  });
+  // The target is only ever chosen in this save dialog; the renderer names the job and the theme.
+  handle(IPC.jobsExportHtml, async (id, theme) => {
+    const job = jobs.get(vJobId(id));
+    const root = job && jobs.outputDir(job.id);
+    if (!job || !root) throw new Error('This result is missing. Run it again to export it.');
+    const w = d.win();
+    if (!w) return null;
+    const s = store.getSettings();
+    const info = skills.list(s).find((x) => x.name === job.skill);
+    const name = `${safeName(job.term, 60)} - ${safeName(info ? skillLabel(info, s.uiLang) : job.skill, 40)}.html`;
+    const r = await dialog.showSaveDialog(w, {
+      title: 'Export as HTML',
+      defaultPath: path.join(outputDirFor(s, job.skill) || app.getPath('documents'), name),
+      filters: [{ name: 'Web page', extensions: ['html'] }],
+      properties: ['createDirectory', 'showOverwriteConfirmation'],
+    });
+    if (r.canceled || !r.filePath) return null;
+    return exportHtml({ outputRoot: root, output: job.output, target: path.resolve(r.filePath), theme: vViewTheme(theme), lang: s.uiLang, title: job.term, katexDir: d.katexDir });
   });
 
   handle(IPC.appWebviewPreload, () => `file://${d.webviewPreload}`);

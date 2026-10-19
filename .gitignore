@@ -35,3 +35,6 @@ coverage/
 *.zip
 *.dmg
 *.app/
+release/
+# Derived from logo.png by scripts/make-icons.swift; the .icns/.ico are committed.
+build/icon.iconset/

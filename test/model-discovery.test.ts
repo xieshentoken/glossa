@@ -3,7 +3,9 @@ import { discoverModels, parseModel } from '../src/main/providers/discovery';
 import { ResponsesProvider } from '../src/main/providers/responses';
 import { GeminiProvider } from '../src/main/providers/gemini';
 import { OpenAICompatProvider } from '../src/main/providers/openai';
-import type { ProviderConfig } from '../src/shared/types';
+import type { Effort, ProviderConfig } from '../src/shared/types';
+import { modelInfo } from '../src/shared/model-catalog';
+import { piModelSpec } from '../src/main/pi-model';
 import type { StreamRequest } from '../src/main/providers';
 
 const base: ProviderConfig = { id: 'work', kind: 'openai', label: 'Work', baseUrl: 'https://example.test/v1', presetId: 'custom' };
@@ -16,6 +18,35 @@ describe('model discovery', () => {
   it('uses the documented per-model Anthropic effort flags over fallback guesses', () => {
     const m = parseModel({ ...base, kind: 'anthropic', presetId: 'anthropic' }, { id: 'claude-opus-5-5', capabilities: { effort: { supported: true, low: { supported: true }, max: { supported: false } } } });
     expect(m).toMatchObject({ efforts: ['low'], effortSource: 'api' });
+  });
+  it('reads the Models API layout as documented (capabilities.effort.<level>.supported)', () => {
+    const anth = { ...base, kind: 'anthropic' as const, presetId: 'anthropic' as const };
+    const all = { supported: true, low: { supported: true }, medium: { supported: true }, high: { supported: true }, xhigh: { supported: true }, max: { supported: true } };
+    expect(parseModel(anth, { id: 'claude-opus-5-5', max_tokens: 128000, capabilities: { effort: all } })).toMatchObject({ efforts: ['low', 'medium', 'high', 'xhigh', 'max'], effortSource: 'api', maxOutputTokens: 128000 });
+    expect(parseModel(anth, { id: 'claude-x', capabilities: { effort: { ...all, supported: false } } })).toMatchObject({ efforts: [], effortSource: 'api' });
+  });
+  it('falls back to the documented levels when an endpoint reports no capabilities (null, proxies)', () => {
+    const anth = { ...base, kind: 'anthropic' as const, presetId: 'anthropic' as const };
+    const five = ['low', 'medium', 'high', 'xhigh', 'max'];
+    for (const id of ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-1', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-5']) {
+      expect(parseModel(anth, { id, capabilities: null }), id).toMatchObject({ efforts: five, effortSource: 'documented' });
+    }
+    expect(parseModel(anth, { id: 'claude-opus-4-6' })).toMatchObject({ efforts: ['low', 'medium', 'high', 'max'], effortSource: 'documented' });
+    expect(parseModel(anth, { id: 'claude-opus-4-5' })).toMatchObject({ efforts: ['low', 'medium', 'high'], effortSource: 'documented' });
+    // These reject effort: known, with no levels.
+    expect(parseModel(anth, { id: 'claude-haiku-4-5' })).toMatchObject({ efforts: [], effortSource: 'documented' });
+    expect(parseModel(anth, { id: 'claude-future-9' })).toMatchObject({ efforts: [], effortSource: 'unknown' });
+  });
+  it('a connection saved while its model was unknown uses what is documented now; levels the API reported stay', () => {
+    const cfg = { ...base, kind: 'anthropic' as const, presetId: 'anthropic' as const, selection: { model: 'claude-opus-5-5', effort: 'default' as const } };
+    const saved = (efforts: Effort[], effortSource: 'api' | 'unknown') => ({ ...cfg, models: [{ id: 'claude-opus-5-5', label: 'Claude Opus 5.5', efforts, effortSource }] });
+    expect(modelInfo(saved([], 'unknown'), 'claude-opus-5-5')).toMatchObject({ label: 'Claude Opus 5.5', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], effortSource: 'documented' });
+    expect(modelInfo(saved(['low', 'high'], 'api'), 'claude-opus-5-5')).toMatchObject({ efforts: ['low', 'high'], effortSource: 'api' });
+  });
+  it('the default setup (Haiku 5.5 at effort low on the built-in connection) is accepted by Pi', () => {
+    const builtin = { id: 'anthropic', kind: 'anthropic' as const, label: 'Anthropic (Claude)' };
+    expect(piModelSpec(builtin, 'claude-haiku-5-5', 'low', 1024)).toMatchObject({ reasoning: true, thinkingLevel: 'low' });
+    expect(() => piModelSpec(builtin, 'claude-haiku-4-5', 'low', 1024)).toThrow(/not supported/);
   });
   it('uses DeepSeek API effort levels and output limits', () => {
     const m = parseModel({ ...base, presetId: 'deepseek' }, { id: 'deepseek-flash', effort: { supported_levels: ['low', 'max'] }, max_output_tokens: 12345 });

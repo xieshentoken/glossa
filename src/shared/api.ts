@@ -2,7 +2,7 @@
 
 import type { ParsedSkill } from './skills';
 import type { ConnectionsApi } from './connections';
-import type { UsageStatus, CardCapture, DocInfo, DocRecord, JobRequest, JobState, OutputKind, Settings, SkillInfo, TermCard } from './types';
+import type { UsageStatus, CardCapture, DocInfo, DocRecord, JobRequest, JobState, OutputKind, Settings, SkillInfo, TermCard, ViewTheme } from './types';
 
 export type LoadedDoc =
   | { kind: 'pdf'; data: Uint8Array }
@@ -92,6 +92,8 @@ export interface GlossaApi {
     outputText(id: string): Promise<{ output: OutputKind; text: string } | undefined>;
     /** Shows the saved copy of a result in the file manager; false when it is gone. */
     showSaved(id: string): Promise<boolean>;
+    /** Saves the result as an HTML page where the user chooses; the path written, or null when cancelled. */
+    exportHtml(id: string, theme: ViewTheme): Promise<string | null>;
     onEvent(cb: (job: JobState) => void): () => void;
   };
   app: {
@@ -145,6 +147,7 @@ export const IPC = {
   jobsGet: 'jobs:get',
   jobsOutputText: 'jobs:outputText',
   jobsShowSaved: 'jobs:showSaved',
+  jobsExportHtml: 'jobs:exportHtml',
   jobsEvent: 'jobs:event',
   appWebviewPreload: 'app:webviewPreload',
   appOpenExternal: 'app:openExternal',

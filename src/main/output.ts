@@ -36,14 +36,15 @@ const SERIF =
 const GRAIN =
   "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .36 0 0 0 0 .27 0 0 0 0 .14 0 0 0 .055 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")";
 
-export async function markdownPage(md: string, opts: { theme: ViewTheme; lang: string; title: string }): Promise<string> {
+/** `standalone`: an exported page, read on its own (a centred column); `katexCss`: KaTeX's stylesheet inlined instead of linked. */
+export async function markdownPage(md: string, opts: { theme: ViewTheme; lang: string; title: string; standalone?: boolean; katexCss?: string }): Promise<string> {
   // An answer written as HTML is shown rendered (its own styles kept, scripts dropped; the CSP allows none).
   const html = htmlAnswer(md);
   const parts = html ? htmlAnswerParts(html) : null;
   // Formulas are rendered first (KaTeX, static HTML) and put back after Markdown, which would mangle them.
   const math = parts ? null : protectMath(md);
   const body = parts ? parts.body : math!.restore(await marked.parse(math!.md));
-  const katexCss = !parts && hasMath(md) ? `<link rel="stylesheet" href="${KATEX_PATH}katex.min.css">` : '';
+  const katexCss = !parts && hasMath(md) ? (opts.katexCss ? `<style>${opts.katexCss.replace(/<\/style/gi, '')}</style>\n` : `<link rel="stylesheet" href="${KATEX_PATH}katex.min.css">`) : '';
   const c = PAGE_THEMES[opts.theme];
   const paper = opts.theme === 'paper';
   return `<!doctype html>
@@ -66,6 +67,7 @@ a { color: ${c.link} }
 table { border-collapse: collapse } td,th { border: 1px solid ${c.line}; padding: .3em .6em }
 .katex { font-size: 1.08em } .katex-display { margin: .8em 0; overflow-x: auto; overflow-y: hidden; padding: .1em 0 }
 ::selection { background: ${c.sel} }
+${opts.standalone ? 'body { max-width: 46rem; margin: 0 auto; padding: 32px 24px 56px }' : ''}
 ${parts?.styles.replace(/<\/style/gi, '') ?? ''}
 </style></head><body>${body}</body></html>`;
 }

@@ -9,6 +9,11 @@
 - 实际应用目录：本文件所在的 `glossa v2/glossa/`。上一级已有 `HANDOFF.md` 属于 fake-expert，保留原样，不用于本功能交接。（本次实施所在副本为 Linux arm64 无界面环境，上一级无该文件，也无双击启动脚本；双击验收须在 macOS 原机进行。）
 - 阶段 1 实施前快照：`glossa v2/.checkpoints/20261017-082331/before-multicard.tar.gz`（不含 `node_modules`）。实施前基线：`npm run typecheck` 通过，`npm test` 14 个文件 / 187 项通过。
 
+## 0e. 第七轮需求（2026-10-19）
+
+1. **识别编程 Agent 会话**（用户批准方案）：Claude Code（`~/.claude/projects/<项目>/<id>.jsonl`）与 Codex（`~/.codex/sessions/…/rollout-…-<id>.jsonl`）的会话文件以对话形式打开，可取词；地址栏可输入 `claude --resume <id>`、`codex resume <id>` 或单独的会话 ID，自动找到本机会话文件。网页会话链接（claude.ai/code、chatgpt.com/codex）仍按普通网页打开。
+2. **卡片“导出为 HTML”按钮**：把 ELI5、Anatomy 等技能的结果另存为 HTML 到用户选择的本地位置（主进程保存对话框）。
+
 ## 0d. 第六轮需求（2026-10-18）
 
 1. **卡片支持 LaTeX 公式渲染**（KaTeX，预先渲染为静态 HTML，结果页仍不允许脚本）。
