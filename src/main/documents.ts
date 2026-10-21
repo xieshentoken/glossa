@@ -81,6 +81,8 @@ export function normalizeUrl(input: string): string {
 export class DocumentService {
   private allowed = new Map<string, DocInfo>();
   private texts = new Map<string, string>();
+  /** Local copies of documents whose source is a web address (downloaded PDFs). */
+  private copies = new Map<string, string>();
 
   async describeFile(file: string): Promise<DocInfo> {
     const kind = fileKind(file);
@@ -109,6 +111,14 @@ export class DocumentService {
     return info;
   }
 
+  /** A PDF downloaded from `url` (see web-pdf.ts); the address stays its source. */
+  async describeDownloadedPdf(url: string, file: string, title: string): Promise<DocInfo> {
+    const info: DocInfo = { docId: await hashFile(file), kind: 'pdf', title, source: url, openedAt: Date.now() };
+    this.copies.set(info.docId, file);
+    this.allowed.set(info.docId, info);
+    return info;
+  }
+
   /** Re-open a recent document. */
   async reopen(info: DocInfo): Promise<DocInfo> {
     if (info.kind === 'web') return this.describeUrl(info.source);
@@ -127,7 +137,7 @@ export class DocumentService {
       case 'web':
         return { kind: 'web', url: info.source };
       case 'pdf':
-        return { kind: 'pdf', data: new Uint8Array(await fs.promises.readFile(info.source)) };
+        return { kind: 'pdf', data: new Uint8Array(await fs.promises.readFile(this.copies.get(docId) ?? info.source)) };
       case 'docx': {
         const buf = await fs.promises.readFile(info.source);
         const [{ value: html }, { value: text }] = await Promise.all([

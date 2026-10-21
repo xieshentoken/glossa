@@ -25,11 +25,16 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
   const fixturePage = `<!doctype html><html lang="en"><head><title>Plants</title></head><body><main>
 <h1>How plants eat</h1><p>Leaves capture light through photosynthesis, turning carbon dioxide and water into sugar.</p>
 </main></body></html>`;
-  session.fromPartition(WEB_PARTITION).protocol.handle('https', (req) =>
-    new URL(req.url).host === FIXTURE_HOST
-      ? new Response(fixturePage, { headers: { 'content-type': 'text/html; charset=utf-8' } })
-      : net.fetch(req, { bypassCustomProtocolHandlers: true }),
-  );
+  const fixturePdf = (file: string, headers: Record<string, string> = {}) =>
+    new Response(new Uint8Array(fs.readFileSync(path.join(dir, file))), { headers: { 'content-type': 'application/pdf', ...headers } });
+  session.fromPartition(WEB_PARTITION).protocol.handle('https', (req) => {
+    const u = new URL(req.url);
+    if (u.host !== FIXTURE_HOST) return net.fetch(req, { bypassCustomProtocolHandlers: true });
+    if (u.pathname === '/papers/boundary.pdf') return fixturePdf('web.pdf');
+    // A PDF behind an address without .pdf, as journals serve them.
+    if (u.pathname === '/article/7/download') return fixturePdf('web2.pdf', { 'content-disposition': 'attachment; filename="Form drag.pdf"' });
+    return new Response(fixturePage, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+  });
   const url = process.env.GLOSSA_SMOKE_WEB_URL || `https://${FIXTURE_HOST}/plants`;
   const wc = win.webContents;
   const log = (...a: unknown[]) => console.log('[smoke]', ...a);
@@ -868,6 +873,33 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
     const ctx2 = await js<string>(`${LAST}.querySelector('.context-line')?.textContent ?? ''`);
     log('spa route: new document', spaDoc.docId.slice(0, 8), 'context:', ctx2.slice(0, 80));
     if (!ctx2.includes('macroscopic state')) throw new Error('stale context after route change');
+
+    // --- PDFs on the web: a typed .pdf address, and a PDF link clicked on the page ----
+    const webTab = await js<string>(`document.querySelector('.tab.on').title`);
+    await js(`(() => { const f = document.querySelector('form.urlbar'); f.querySelector('input').value = 'https://${FIXTURE_HOST}/papers/boundary.pdf'; f.requestSubmit(); })()`);
+    // The tab is titled from the PDF's own metadata once loaded, like a local PDF; its source is the address.
+    const pdfShown = (address: string, word: string) =>
+      waitFor('web pdf in the pdf reader', `document.querySelector('.tab.on')?.title === ${JSON.stringify(`https://${FIXTURE_HOST}`)} + ${JSON.stringify(address)} && [...document.querySelectorAll('.reader.active .textLayer span')].some((s) => s.textContent.includes(${JSON.stringify(word)}))`, 20000).catch(async (err: Error) => {
+        const seen = await js<string>(`document.querySelector('.tab.on')?.textContent + ' | ' + (document.querySelector('.error-bar')?.textContent ?? '') + ' | ' + (document.querySelector('.reader.active')?.textContent ?? '').slice(0, 200)`);
+        throw new Error(`${err.message}; shown: ${seen}`);
+      });
+    await pdfShown('/papers/boundary.pdf', 'viscosity');
+    const webPdfKind = await js<string>(`document.querySelector('.tab.on .tab-kind').textContent`);
+    if (webPdfKind !== 'PDF') throw new Error(`web pdf shown as ${webPdfKind}`);
+    await pickWithMouse('.reader.active .textLayer', 'viscosity');
+    key('Return');
+    if ((await newCardTerm(0)) !== 'viscosity') throw new Error('term not picked in the web pdf');
+    if (deps.store.recentDocs().find((d) => d.source === `https://${FIXTURE_HOST}/papers/boundary.pdf`)?.kind !== 'pdf') throw new Error('web pdf not recorded as a pdf with its address');
+    await shoot('13-web-pdf');
+    key('Escape');
+    await js(`[...document.querySelectorAll('.tab')].find((x) => x.title === ${JSON.stringify(webTab)}).click()`);
+    await guest.executeJavaScript(`(() => { const a = document.createElement('a'); a.href = '/article/7/download'; a.textContent = 'Full paper'; document.body.append(a); a.click(); })()`);
+    await pdfShown('/article/7/download', 'wake');
+    if (!guest.getURL().endsWith('/glossa-spa-route')) throw new Error(`the page navigated away: ${guest.getURL()}`);
+    if (fs.readdirSync(path.join(deps.store.dir, 'web-pdfs')).length !== 2) throw new Error('web pdf copies missing');
+    await js(`[...document.querySelectorAll('.tab')].find((x) => x.title === ${JSON.stringify(webTab)}).click()`);
+    await waitFor('back on the web page', `document.querySelector('.tab.on')?.title === ${JSON.stringify(webTab)}`);
+    log('web pdfs: typed .pdf address and a clicked PDF link open in the PDF reader; term picked; page stays');
 
     // --- web page permissions in the real <webview> session -----------------------
     const perms = await guest.executeJavaScript(`(async () => ({

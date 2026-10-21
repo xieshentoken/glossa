@@ -9,6 +9,10 @@ Each pick gets its own card; earlier cards stay. A card keeps every skill run
 started from it, can be dragged, resized, minimized and closed, and belongs to
 its document: switching documents shows that document's cards.
 
+A web address ending in `.pdf` (or an arXiv PDF link, or a PDF link clicked on a page) opens in
+the PDF reader. Claude Code and Codex sessions open as conversations: a session's `.jsonl`
+file, or `claude --resume <id>`, `codex resume <id>` or a session ID typed in the address bar.
+
 Plan and roadmap: [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md).
 
 ## Run
@@ -64,6 +68,27 @@ Ollama, offline demo, and per-skill overrides remain available.
 **What is sent:** by default, the term, its sentence and its paragraph
 (Settings → General → *Context sent with each lookup*). Sending whole documents
 needs a confirmation the app shows itself. Each card shows where a request goes (`endpoint · model · scope`).
+
+## Packaging (macOS)
+
+```bash
+npm run package:mac         # build, then release/Glossa-<version>-mac-arm64.tar.gz and -mac-x64.tar.gz
+```
+
+Each archive holds `Glossa.app` (Apple silicon or Intel) and `How to open Glossa.txt`.
+The app icon is `build/icon.icns`, made from `build/icon.png` (the logo `logo.png` in the
+macOS rounded-square shape) with `node scripts/make-icns.mjs` (needs ImageMagick).
+Only the built-in Pi agent's packages are shipped from `node_modules`; everything else is
+bundled in `dist/`. `node scripts/package.mjs --platform linux` packages the same layout for
+Linux, and `GLOSSA_SMOKE_APP=release/Glossa-linux-arm64/glossa node scripts/smoke.mjs` runs
+the smoke test against it.
+
+Apple silicon only runs signed code. Without an Apple Developer ID the app is signed
+**ad hoc** with [`rcodesign`](https://github.com/indygreg/apple-platform-rs) (set `RCODESIGN`
+or put it on `PATH`; without it the script says NOT SIGNED). It is not notarized, so the first
+launch needs **System Settings → Privacy & Security → Open Anyway** (or
+`xattr -dr com.apple.quarantine /Applications/Glossa.app`). A `.dmg` needs macOS
+(`hdiutil create -volname Glossa -srcfolder Glossa.app -format UDZO Glossa.dmg`).
 
 ## Using it
 

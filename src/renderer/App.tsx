@@ -750,7 +750,8 @@ const NEXT_THEME: Record<ThemePref, ThemePref> = { system: 'light', light: 'dark
 
 /** Where a document comes from: host of a web page, or the folder (or file name) of a file. */
 function whereFrom(d: DocInfo, part: 'folder' | 'file' = 'folder'): string {
-  if (d.kind === 'web') {
+  // A web page, or a PDF opened from the web.
+  if (d.kind === 'web' || /^https?:\/\//i.test(d.source)) {
     try {
       return new URL(d.source).host;
     } catch {

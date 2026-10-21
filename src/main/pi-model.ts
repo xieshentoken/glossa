@@ -36,8 +36,7 @@ export function piModelSpec(cfg: ProviderConfig, model: string, effort: Effort, 
   const official = presetId === 'custom' ? '' : presetFor(presetId).baseUrl;
   const baseUrl = (cfg.baseUrl || official || (cfg.kind === 'anthropic' ? 'https://api.anthropic.com' : '')).replace(/\/+$/, '');
   if (!baseUrl) throw new JobRejected(`The connection "${cfg.label}" has no address.`);
-  const info = modelInfo(cfg, model);
-  const efforts = info.efforts;
+  const efforts = modelInfo(cfg, model).efforts;
   const thinkingLevelMap: Partial<Record<PiThinkingLevel, string | null>> = {};
   for (const l of LEVELS) thinkingLevelMap[l] = efforts.includes(l) ? l : null;
   // 'default' sends no thinking parameter at all, as Glossa's own requests did.
@@ -48,10 +47,7 @@ export function piModelSpec(cfg: ProviderConfig, model: string, effort: Effort, 
   }
   const compat =
     cfg.kind === 'openai'
-      ? {
-          supportsReasoningEffort: !!cfg.sendReasoningEffort || !!(cfg.selection && info.thinking !== 'toggle' && efforts.length),
-          ...(cfg.maxTokensField && cfg.maxTokensField !== 'none' ? { maxTokensField: cfg.maxTokensField } : {}),
-        }
+      ? { supportsReasoningEffort: !!cfg.sendReasoningEffort, ...(cfg.maxTokensField && cfg.maxTokensField !== 'none' ? { maxTokensField: cfg.maxTokensField } : {}) }
       : undefined;
   const catalogProvider = CATALOG[presetId];
   return {

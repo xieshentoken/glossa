@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { app, BrowserWindow, nativeImage, nativeTheme, protocol, safeStorage, session, utilityProcess } from 'electron';
+import { app, BrowserWindow, nativeTheme, protocol, safeStorage, session, utilityProcess } from 'electron';
 import { IPC } from '../shared/api';
 import { cardJobIds, cardPictureIds } from '../shared/cards';
 import { UI_LANGS, type Settings, type Theme, type UiLang } from '../shared/types';
@@ -12,6 +12,7 @@ import { JobManager } from './jobs';
 import { mimeFor } from './output';
 import { runPi, type SpawnWorker } from './runners/pi';
 import { serveOutput } from './output-protocol';
+import { WebPdfs } from './web-pdf';
 import { cleanJobs } from './retention';
 import { electronBackend } from './secrets';
 import { SkillRegistry } from './skills';
@@ -35,12 +36,7 @@ const rendererDir = path.join(rootDir, 'dist', 'renderer');
 const webviewPreload = path.join(rootDir, 'dist', 'preload', 'webview.js');
 const piWorker = path.join(rootDir, 'dist', 'main', 'pi-worker.mjs');
 const katexDir = path.join(rootDir, 'dist', 'katex');
-
-/** The app icon, for the window (Windows/Linux) and the macOS Dock. */
-const appIcon = (() => {
-  const file = ['assets/icon.png', 'logo.png'].map((f) => path.join(rootDir, f)).find((f) => fs.existsSync(f));
-  return file ? nativeImage.createFromPath(file) : undefined;
-})();
+const appIcon = path.join(rootDir, 'build', 'icon.png');
 
 /** The built-in Pi agent runs each job in its own Electron utility process. */
 const spawnPi: SpawnWorker = (env) => {
@@ -73,6 +69,7 @@ nativeTheme.on('updated', () => {
 let store: Store;
 let skills: SkillRegistry;
 let docs: DocumentService;
+let webPdfs: WebPdfs;
 let jobs: JobManager;
 
 function osLang(): UiLang {
@@ -102,7 +99,11 @@ function sendToRenderer(channel: string, ...args: unknown[]): void {
 }
 
 function hardenContents(): void {
-  lockDownSession(session.fromPartition(WEB_PARTITION));
+  // A PDF link clicked on a page opens in a new tab, in the PDF reader.
+  lockDownSession(session.fromPartition(WEB_PARTITION), undefined, (url) => {
+    webPdfs.remember(url);
+    sendToRenderer(IPC.appOpenInTab, url);
+  });
   // The app's own pages need no browser permissions either.
   lockDownSession(session.defaultSession);
   app.on('web-contents-created', (_e, contents) => {
@@ -168,7 +169,8 @@ async function createWindow(): Promise<void> {
     minWidth: 720,
     minHeight: 480,
     title: 'Glossa',
-    ...(appIcon ? { icon: appIcon } : {}),
+    // The packaged macOS app uses build/icon.icns; elsewhere (and when run from source) the window carries the logo.
+    ...(process.platform === 'darwin' ? {} : { icon: appIcon }),
     backgroundColor: windowBg(),
     show: !process.env.GLOSSA_SMOKE,
     webPreferences: {
@@ -205,7 +207,6 @@ async function createWindow(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
-  if (process.platform === 'darwin' && appIcon) app.dock?.setIcon(appIcon);
   store = new Store(app.getPath('userData'), electronBackend(safeStorage), osLang());
   applyTheme(store.getSettings());
   store.onSettings = applyTheme;
@@ -214,6 +215,7 @@ app.whenReady().then(async () => {
   if ('skipped' in migration) console.warn(`Legacy plain-text keys left in place: ${migration.skipped}`);
   skills = new SkillRegistry(path.join(rootDir, 'builtin-skills'), store.skillsDir);
   docs = new DocumentService();
+  webPdfs = new WebPdfs(path.join(app.getPath('userData'), 'web-pdfs'), (u) => session.fromPartition(WEB_PARTITION).fetch(u));
   jobs = new JobManager({
     store,
     skills: () => skills.list(store.getSettings()),
@@ -227,8 +229,10 @@ app.whenReady().then(async () => {
   });
   registerProtocols();
   hardenContents();
-  registerIpc({ win: () => win, store, skills, docs, jobs, confirmGrant: grantDialog(() => win), webviewPreload, katexDir });
+  registerIpc({ win: () => win, store, skills, docs, jobs, confirmGrant: grantDialog(() => win), webviewPreload, katexDir, webPdfs });
   cleanUp();
+  // Run from source on macOS, the Dock would show Electron's icon.
+  if (process.platform === 'darwin' && !app.isPackaged && fs.existsSync(appIcon)) app.dock?.setIcon(appIcon);
   await createWindow();
   app.on('activate', () => {
     if (!win) void createWindow();

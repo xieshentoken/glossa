@@ -11,10 +11,18 @@ export interface SessionLike {
   setPermissionCheckHandler(h: ((wc: unknown, permission: string, origin: string, details?: unknown) => boolean) | null): void;
   setDevicePermissionHandler?(h: ((details: unknown) => boolean) | null): void;
   setDisplayMediaRequestHandler?(h: ((req: unknown, cb: (streams: object) => void) => void) | null): void;
-  on?(event: 'will-download', listener: (e: { preventDefault(): void }, item: { cancel(): void }) => void): unknown;
+  on?(event: 'will-download', listener: (e: { preventDefault(): void }, item: DownloadLike) => void): unknown;
 }
 
-export function lockDownSession(ses: SessionLike, allowed = ALLOWED_WEB_PERMISSIONS): void {
+export interface DownloadLike {
+  cancel(): void;
+  getURL?(): string;
+  getMimeType?(): string;
+  getFilename?(): string;
+}
+
+/** `onPdf`: a page opened a PDF (a link to one); the reader opens it itself, the download does not happen. */
+export function lockDownSession(ses: SessionLike, allowed = ALLOWED_WEB_PERMISSIONS, onPdf?: (url: string) => void): void {
   ses.setPermissionRequestHandler((_wc, permission, cb) => cb(allowed.has(permission)));
   ses.setPermissionCheckHandler((_wc, permission) => allowed.has(permission));
   ses.setDevicePermissionHandler?.(() => false);
@@ -23,6 +31,8 @@ export function lockDownSession(ses: SessionLike, allowed = ALLOWED_WEB_PERMISSI
   ses.on?.('will-download', (e, item) => {
     e.preventDefault();
     item.cancel();
+    const url = item.getURL?.() ?? '';
+    if (onPdf && webNavigationAllowed(url) && (/pdf/i.test(item.getMimeType?.() ?? '') || /\.pdf$/i.test(item.getFilename?.() ?? ''))) onPdf(url);
   });
 }
 

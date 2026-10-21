@@ -8,10 +8,11 @@ import { ConnectionService } from './connections';
 import { connectionRequestId, connectionSave, connectionTest } from './connection-validation';
 import { IPC } from '../shared/api';
 import type { DocInfo } from '../shared/types';
-import { CODE_EXTS, DocumentService, FILE_KINDS } from './documents';
+import { CODE_EXTS, DocumentService, FILE_KINDS, normalizeUrl } from './documents';
 import { probeHarness } from './harness-probe';
 import { exportHtml, outputDirFor, safeName } from './output-export';
 import { findSessionFile, sessionRef } from './sessions';
+import type { WebPdfs } from './web-pdf';
 import { errorMessage, type JobManager } from './jobs';
 import { MAX_CAPTURE_SIDE } from './captures';
 import { createProvider } from './providers';
@@ -31,6 +32,7 @@ export interface IpcDeps {
   webviewPreload: string;
   /** KaTeX's stylesheet and fonts, inlined into exported pages with formulas. */
   katexDir: string;
+  webPdfs: WebPdfs;
 }
 
 export function registerIpc(d: IpcDeps): void {
@@ -156,16 +158,23 @@ export function registerIpc(d: IpcDeps): void {
   });
   // Drag and drop: the user chose the file; only supported document types are opened.
   handle(IPC.docsOpenPath, async (file) => remember(await docs.describeFile(path.resolve(vAbsPath(file)))));
-  // A Claude Code / Codex resume command or session id opens that session's transcript.
-  handle(IPC.docsOpenUrl, async (url) => {
-    const input = vUrl(url);
+  // A Claude Code / Codex resume command or session id opens that session's transcript;
+  // a PDF on the web opens in the PDF reader; anything else as a web page.
+  const openAddress = async (input: string): Promise<DocInfo> => {
     const ref = sessionRef(input);
-    return remember(ref ? await docs.describeFile(findSessionFile(ref)) : docs.describeUrl(input));
-  });
+    if (ref) return docs.describeFile(findSessionFile(ref));
+    const url = normalizeUrl(input);
+    if (d.webPdfs.isPdf(url)) {
+      const pdf = await d.webPdfs.download(url);
+      if (pdf) return docs.describeDownloadedPdf(url, pdf.file, pdf.title);
+    }
+    return docs.describeUrl(url);
+  };
+  handle(IPC.docsOpenUrl, async (url) => remember(await openAddress(vUrl(url))));
   handle(IPC.docsReopen, async (raw) => {
     const info = raw as DocInfo;
     if (!info || typeof info !== 'object') throw new Error('Invalid document');
-    if (info.kind === 'web') return remember(docs.describeUrl(vUrl(info.source)));
+    if (info.kind === 'web' || /^https?:\/\//i.test(info.source)) return remember(await openAddress(vUrl(info.source)));
     return remember(await docs.describeFile(vAbsPath(info.source)));
   });
   handle(IPC.docsLoad, (id) => docs.load(vDocId(id)));

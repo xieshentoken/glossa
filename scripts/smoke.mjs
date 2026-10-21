@@ -21,6 +21,9 @@ fs.writeFileSync(
   ]),
 );
 
+// Served from the fixture web host: a typed .pdf address and a PDF link on a page.
+fs.writeFileSync(path.join(fixtures, 'web.pdf'), makePdf(['Boundary layers', 'Near a wall, viscosity slows the flow to rest.']));
+fs.writeFileSync(path.join(fixtures, 'web2.pdf'), makePdf(['Drag', 'Form drag grows with the wake behind a body.']));
 fs.writeFileSync(
   path.join(fixtures, 'long.pdf'),
   makePdfPages(Array.from({ length: 80 }, (_, i) => [`Page ${i + 1}`, 'Viscosity resists the relative motion of fluid layers.'])),
@@ -38,8 +41,10 @@ const env = {
 const devlibs = path.join(root, '.devlibs');
 if (fs.existsSync(devlibs)) env.LD_LIBRARY_PATH = [devlibs, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':');
 
-const electron = path.join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron');
-const args = ['.'];
+// GLOSSA_SMOKE_APP: a packaged app's executable (scripts/package.mjs) instead of the source tree.
+const packaged = process.env.GLOSSA_SMOKE_APP;
+const electron = packaged || path.join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron');
+const args = packaged ? [] : ['.'];
 if (process.platform === 'linux' && !process.env.DISPLAY) args.push('--ozone-platform=headless', '--disable-gpu');
 if (process.env.GLOSSA_NO_SANDBOX) args.push('--no-sandbox');
 // The fixture server is local; never send it through a configured proxy.

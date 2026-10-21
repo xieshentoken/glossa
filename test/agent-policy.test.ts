@@ -141,7 +141,7 @@ describe('environment', () => {
     process.env.FAKE_AGENT_DUMP_ENV = '1';
     const h = setup(dir);
     h.store.setSettings({ harnesses: [{ ...h.store.getSettings().harnesses[0], keyFromProvider: 'anthropic', keyEnv: 'ANTHROPIC_API_KEY' }] });
-    h.store.setKey('anthropic', 'sk-synthetic-test-only-00000000000000000000');
+    h.store.setKey('anthropic', 'sk-synthetic-key-123456');
     const j = await settle(h.jobs, (await h.jobs.start(req('fake-figure'))).id);
     expect(j.status).toBe('done');
     const work = path.join(h.jobs.jobDir(j.id), 'work');
@@ -150,10 +150,10 @@ describe('environment', () => {
     expect(env.GLOSSA_SYNTHETIC_OTHER).toBeUndefined();
     expect(env.PATH).toBeDefined();
     expect(env.TMPDIR).toBe(path.join(work, '.tmp'));
-    expect(env.ANTHROPIC_API_KEY).toBe('sk-synthetic-test-only-00000000000000000000');
+    expect(env.ANTHROPIC_API_KEY).toBe('sk-synthetic-key-123456');
     const log = fs.readFileSync(path.join(h.jobs.jobDir(j.id), 'harness.log'), 'utf8');
     expect(log).toContain('using key [redacted]');
-    expect(log).not.toContain('sk-synthetic-test-only-00000000000000000000');
+    expect(log).not.toContain('sk-synthetic-key-123456');
   });
 
   it('builds the allow-list per platform and redacts proxy credentials', () => {
