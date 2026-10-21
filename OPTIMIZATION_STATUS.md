@@ -1,14 +1,33 @@
 # Glossa 稳定化记录（P0 / P1，2026-10-17）
 
-## v2.6 发布检查（2026-10-19，macOS arm64）
+## v2.7 发布检查（2026-10-22，macOS arm64）
 
-- **隐私清理**：移除文档中的机器专属绝对路径（本机临时目录、只读基线快照路径）；安全测试中的密钥形状字符串统一为明确的合成凭据（`sk-synthetic-test-only-…`）。对源码、文档、测试与夹具全树扫描，未发现真实凭据、个人主机名、邮箱、账号或电话类标识；保留上游作者 / 许可证信息与有意设计的负面测试（如 `sk-secret-123` 的日志脱敏用例）。
-- **修复**：合并 v2.4 发布中已验证的“API 发现思考强度”映射（`pi-model.ts`：已保存连接按连接测试发现的能力发送所选强度，服务商默认仍不附加该参数），并恢复真实 worker + 本地 HTTP 夹具回归测试；去掉该修复时该用例失败。
-- **应用图标**：`assets/icon.png`（1024，窗口与 macOS Dock）、`build/icon.icns`、`build/icon.ico`。生成脚本 `scripts/make-icons.swift` 按 Apple 图标网格（主体 824/1024、圆角、软阴影）从项目根目录的方形 `logo.png` 生成；原始 logo 素材不随源码发布，已生成的图标随仓库提供。
-- **可分发安装包**：`electron-builder` 配置随 `package.json` 提供（`npm run dist:mac` / `npm run dist:win`），产出 macOS dmg（arm64 / x64）与 Windows NSIS（x64）；产物目录 `release/` 不入库。
-- **验证 PASS**：`npm run typecheck`；23 个测试文件 / 290 项；`npm run build`；开发态 Electron 冒烟两阶段；打包后的 macOS 应用冒烟 phase 1 全通过。
-- **依赖审计沿用 OPEN**：`npm audit` 报告 3 条中危、0 条高危 / 严重，来自同一条 `mammoth → argparse → sprintf-js` 依赖链（[GHSA-hp3w-g68c-fv3c](https://github.com/advisories/GHSA-hp3w-g68c-fv3c)）；依赖锁定不变，跟进上游修复。
-- **边界**：安装包为 ad-hoc 签名（无 Developer ID 与公证）、Windows 包未签名，分发时系统会给出提示；未调用真实模型 / 付费账户；静态扫描不能证明不存在任何未知形式的敏感信息。
+- **隐私清理**：再次全树扫描源码、文档、测试与夹具，移除文档中的机器专属绝对路径（本机临时目录 `TMPDIR` 子路径、构建副本的用户主目录）；安全测试中的密钥形状字符串沿用明确的合成凭据（`sk-synthetic-test-only-…` / `sk-synthetic-…`），保留上游作者 / 许可证信息与有意设计的负面测试（如 `sk-secret-123` 的日志脱敏用例）。
+- **未发现**：真实凭据、API key、个人主机名、邮箱、账号、电话或私有网段信息；二进制图标中命中的“邮箱”形状为压缩像素数据的误报，已逐一核对。
+- **提交身份**：以 GitHub noreply 身份提交，提交历史不含本机用户名、主机名或本机邮箱。
+- **边界**：静态扫描不能证明不存在任何未知形式的敏感信息；本次发布未运行 `npm run typecheck` / `npm test`（发布副本不含 `node_modules`）。
+
+<!-- round9-checkpoint:start -->
+## 第九轮：缩放时阅读位置跳动（2026-10-21，Linux arm64 无界面副本）
+
+- **复现**（冒烟内诊断，`GLOSSA_ZOOM_DIAG=1` 只跑缩放检查）：在页面内派发 Ctrl+滚轮事件（外部注入的滚轮会被 Chromium 合并、丢弃，不可靠），量缩放前后指针下内容的位置。修复前：PDF 每次缩放跳 8–16 页（第 40 页 → 24 → 31 → 40 → 51）；网页指针下的段落移位；Markdown 连续快速缩放时偏移。
+- **原因**：① 旧算法假定内容从滚动区顶端按比例放大（`scrollTop × k`），文字在变宽 / 变窄的栏中重排、PDF 页间距与边距不随缩放变化时都不成立；② 触控板捏合一帧内多个滚轮事件被 React 合批，第二个锚点以旧版面、错误比例计算；③ PDF 约 180 ms 后重新渲染：先清空页面（期间读到的滚动位置为 0），CSS 缩放提前一轮恢复为 1（旧页缩小、滚动位置被截断），再按 scrollHeight 比例恢复位置（间距不缩放，误差可达上千像素）；CSS 缩放作用在整列上，间距、边距与居中宽度（`min-width: 100%`）一并缩放，页面先横移、重新渲染后又跳回；④ 网页使用 Chromium 页面缩放，固定左上角而非指针处；⑤ PDF 工具栏 +/−、缩放百分比按钮与 Ctrl+0 直接设缩放，没有锚点。
+- **修复**：`src/shared/zoom-anchor.ts`：锚点为指针下的字符（不在文字上时为该处元素）及其框内比例，新版面后滚动使其回到指针下（不论缩放、重排）。App：同一面板在渲染前的多次缩放步保留第一个锚点；`zoomTo` 统一处理捏合、工具栏、百分比按钮与 Ctrl+0（无指针时固定面板中央）。PDF：即时缩放改为每页 `zoom: var(--page-zoom)`（间距、边距不变，与重新渲染后的版面一致），由布局效果与重建同步设置；重新渲染时旧页保留到新页替换为止，按“面板中央所在页 + 页内比例”恢复。网页：宿主发送 `glossa:zoomTo`，页面（preload）取锚点、自行 `webFrame.setZoomFactor`，待 devicePixelRatio 反映新缩放后滚回，并保持 300 ms（页面后续排版、Chromium 自身的滚动锚定），用户滚动 / 点击 / 键入即停止；以定时器而非 requestAnimationFrame 轮询（后者在调试中曾停摆，致使旧锚点被下一次捏合误用）；相隔 250 ms 以上的缩放步视为新的捏合；页面确认已应用后，宿主不再补设缩放（否则会无锚点地再排版一次）。冒烟脚本每次启动的超时由 120 s 提高到 300 s（新增缩放检查约 40 s）。
+- **验证**：`npm run typecheck` PASS；`npm test` 24 个文件 / 298 项 PASS；Electron 冒烟两次启动 PASS，新增“缩放保持指针下内容”步骤（五种捏合：一次性 / 间隔 12、40 ms，放大 / 缩小）：Markdown 指针下字符的行偏移 [0,0,-0.96,-0.98,0]（多步捏合时文字重排可让词换到相邻行，限 ≤ 1 行）；PDF 竖直偏移 ≤ 2 px（横向偏移来自窄于面板的页面居中放大或左缘无法再滚动，属预期）；PDF 工具栏 + 与 Ctrl+0 面板中央竖直 0 px；网页 [0,0,0,0,0]（修复后连续 5 次 + 完整冒烟均为 0）。Mac arm64 包重新生成、ad hoc 签名，独立校验通过，包内含本次修复。
+- **NOT RUN**：真实触控板 / 触摸屏捏合（以页面内合成的 Ctrl+滚轮事件代替）；在 Mac 上运行。
+- **快照**：改前 `../.checkpoints/fix10-20261021-052032/before.tar.gz`，完成 `done.tar.gz`。
+<!-- round9-checkpoint:end -->
+
+<!-- round8-checkpoint:start -->
+## 第八轮：PDF 网址、macOS 安装包与应用图标（2026-10-21，Linux arm64 无界面副本）
+
+- **PDF 网址**：`src/main/web-pdf.ts`。地址路径以 `.pdf` 结尾、arXiv `/pdf/` 链接，或网页中点击后被浏览器当作 PDF 下载的地址（`will-download` 时 MIME 为 PDF 或文件名为 .pdf：仍取消下载，改为在新标签中打开）→ 在网页会话（`persist:web`，同 Cookie 与规则）中下载，上限 200 MB，按内容（`%PDF-`）确认；服务器返回网页（登录页等）则按网页打开。副本存于 `userData/web-pdfs/`（按地址哈希命名，每次打开重新下载，超过 7 天的副本删除）。文档类型为 `pdf`，来源仍为网址（最近文档重新打开时重新下载）；文档 ID 为内容哈希，与本地同一 PDF 共用卡片。标签提示显示主机名。
+- **图标**：`build/icon.png`（logo.png 缩放至 824 px、macOS 圆角矩形、透明边距与柔和阴影，1024 px）与 `build/icon.icns`（11 种尺寸，`scripts/make-icns.mjs`，需 ImageMagick）。Linux / Windows 窗口图标与 macOS 源码运行时的 Dock 图标使用 `build/icon.png`。
+- **macOS 打包**：`scripts/package.mjs`（新增开发依赖 `@electron/packager` 20.3.0，精确锁定，经 npm 联网安装；Electron 44.8.0 darwin 版由其从 GitHub 下载）。不使用 asar；`node_modules` 只带内置 Pi 运行所需的 118 个包（其余均已打包进 `dist/`）。Apple 芯片要求签名：以 `rcodesign` 0.29.0（GitHub 下载、校验 SHA-256，置于 `~/ext-src/rcodesign/`，不在项目内）做 ad hoc 签名（Electron 原二进制本身也是 ad hoc、无 hardened runtime）。未公证。产出 `.tar.gz`（含 `How to open Glossa.txt` 首次打开说明）；`.dmg` 需在 macOS 上用 `hdiutil` 制作。`npm run package:mac` 生成两种架构。
+- **验证**：`npm run typecheck` PASS；`npm test` 24 个文件 / 298 项 PASS（新增 `test/web-pdf.test.ts` 9 项）；Electron 冒烟（源码）两次启动 PASS（新增：地址栏输入 .pdf 网址在 PDF 阅读器打开并取词；网页中点击无扩展名的 PDF 链接在新标签打开、原网页不跳转；副本存在）；**打包后的 Linux arm64 应用（同一裁剪布局）冒烟两次启动 PASS**（含 4 次 Pi worker 运行），证明裁剪后的 `node_modules` 足够。macOS 包：自写校验脚本（`../.checkpoints/feat9-20261021-022906/scratch/verify_sig.py`）按 macOS 的方式重新计算两种架构的全部 15 个 Mach-O 的代码页哈希、Info.plist / CodeResources 特殊槽、15483 项封存资源与嵌套代码 cdhash，均一致；改动一个文件后校验失败（反向验证）；从 `.tar.gz` 解压的副本同样通过，框架符号链接与可执行权限保留；Info.plist（Glossa、`app.glossa.reader`、0.1.0、最低 macOS 13）与图标正确；主程序 CPU 类型分别为 arm64 / x86_64。截图：`../.checkpoints/feat9-20261021-022906/shots/13-web-pdf.png`。
+- **NOT RUN**：在真实 Mac 上启动（本机为 Linux；Gatekeeper 对未公证应用的首次打开流程按 Apple 现行规则说明）；真实网站的 PDF 下载（冒烟使用夹具主机）；`.dmg`。
+- **快照**：改前 `../.checkpoints/feat9-20261021-022906/before.tar.gz`，完成 `done.tar.gz`。
+<!-- round8-checkpoint:end -->
 
 <!-- round7-checkpoint:start -->
 ## 第七轮：Agent 会话文档、卡片导出 HTML（2026-10-19，Linux arm64 无界面副本）

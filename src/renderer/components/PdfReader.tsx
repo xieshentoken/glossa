@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { getDocument, GlobalWorkerOptions, TextLayer, type PDFDocumentProxy, type RenderTask } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { T } from '../../shared/i18n';
@@ -37,6 +37,15 @@ export function PdfReader(props: {
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const target = BASE_SCALE * props.zoom;
   const [scale, setScale] = useState(target);
+  // The pages in the panel are rendered at `shown`; until they are rendered again, a CSS zoom on
+  // each page (not on the column: its gaps and margins do not grow when pages are rendered again)
+  // makes them the size of `target`. Set here and with the pages, never one render early.
+  const shown = useRef(scale);
+  const targetRef = useRef(target);
+  targetRef.current = target;
+  useLayoutEffect(() => {
+    pagesRef.current?.style.setProperty('--page-zoom', String(target / shown.current));
+  }, [target]);
   useEffect(() => {
     if (target === scale) return;
     const id = setTimeout(() => setScale(target), 180);
@@ -89,10 +98,7 @@ export function PdfReader(props: {
   useEffect(() => {
     const host = pagesRef.current;
     if (!pdf || !host) return;
-    // Rendering again at a new scale keeps the reading position.
     const scroller = host.parentElement;
-    const at = scroller && scroller.scrollHeight > 0 ? { top: scroller.scrollTop / scroller.scrollHeight, left: scroller.scrollLeft / Math.max(1, scroller.scrollWidth) } : null;
-    host.replaceChildren();
     const dpr = window.devicePixelRatio || 1;
     // Pages are rendered when near the viewport, at most RENDER_CONCURRENCY at a time,
     // and their canvases are released again when they scroll far away.
@@ -173,7 +179,12 @@ export function PdfReader(props: {
     };
     (async () => {
       const first = await pdf.getPage(1);
+      if (disposed) return;
       const vp = first.getViewport({ scale });
+      // Rendering again at a new scale keeps the reading position: the spot of the page in the
+      // middle of the panel stays there. The old pages stay until the new ones replace them.
+      const keep = scroller ? pageSpot(host, scroller) : undefined;
+      host.replaceChildren();
       for (let n = 1; n <= pdf.numPages && !disposed; n++) {
         const div = document.createElement('div');
         div.className = 'pdf-page';
@@ -187,9 +198,13 @@ export function PdfReader(props: {
         near.observe(div);
         far.observe(div);
       }
-      if (at && scroller && !disposed) {
-        scroller.scrollTop = at.top * scroller.scrollHeight;
-        scroller.scrollLeft = at.left * scroller.scrollWidth;
+      shown.current = scale;
+      host.style.setProperty('--page-zoom', String(targetRef.current / scale));
+      const page = keep && host.querySelector<HTMLElement>(`.pdf-page[data-page="${keep.n}"]`);
+      if (keep && page && scroller) {
+        const b = page.getBoundingClientRect();
+        scroller.scrollTop += b.top + keep.fy * b.height - keep.y;
+        scroller.scrollLeft += b.left + keep.fx * b.width - keep.x;
       }
     })();
     return () => {
@@ -298,8 +313,26 @@ export function PdfReader(props: {
         {pdf ? <span className="muted">{pdf.numPages} p.</span> : <span className="muted">{t('loading')}</span>}
       </div>
       <div className="doc-scroll doc-surface">
-        <div className="pdf-pages" ref={pagesRef} style={{ zoom: target / scale }} />
+        <div className="pdf-pages" ref={pagesRef} />
       </div>
     </div>
   );
+}
+
+/** The page at the middle of the panel (or the nearest one) and where the middle is on it. */
+function pageSpot(host: HTMLElement, scroller: HTMLElement): { n: number; fx: number; fy: number; x: number; y: number } | undefined {
+  const s = scroller.getBoundingClientRect();
+  const x = s.left + s.width / 2;
+  const y = s.top + s.height / 2;
+  let best: { el: HTMLElement; d: number } | undefined;
+  for (const el of host.children as HTMLCollectionOf<HTMLElement>) {
+    const b = el.getBoundingClientRect();
+    const d = y < b.top ? b.top - y : y > b.bottom ? y - b.bottom : 0;
+    if (!best || d < best.d) best = { el, d };
+    if (b.top > y) break;
+  }
+  if (!best) return undefined;
+  const b = best.el.getBoundingClientRect();
+  if (!b.width || !b.height) return undefined;
+  return { n: Number(best.el.dataset.page), fx: (x - b.left) / b.width, fy: (y - b.top) / b.height, x, y };
 }

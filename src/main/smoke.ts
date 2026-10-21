@@ -33,6 +33,7 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
     if (u.pathname === '/papers/boundary.pdf') return fixturePdf('web.pdf');
     // A PDF behind an address without .pdf, as journals serve them.
     if (u.pathname === '/article/7/download') return fixturePdf('web2.pdf', { 'content-disposition': 'attachment; filename="Form drag.pdf"' });
+    if (u.pathname === '/long') return new Response(fs.readFileSync(path.join(dir, 'long.md'), 'utf8').split('\n\n').slice(1).map((x) => `<p>${x}</p>`).join('\n').replace(/^/, '<!doctype html><html lang="en"><head><title>Long page</title></head><body style="max-width:700px;margin:auto;font:16px/1.6 sans-serif">') + '</body></html>', { headers: { 'content-type': 'text/html; charset=utf-8' } });
     return new Response(fixturePage, { headers: { 'content-type': 'text/html; charset=utf-8' } });
   });
   const url = process.env.GLOSSA_SMOKE_WEB_URL || `https://${FIXTURE_HOST}/plants`;
@@ -206,6 +207,169 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
   }
 
   await shoot('0-welcome');
+
+  // --- zoom keeps what is under the pointer in place ------------------------------
+  /** The character under a point, as its offset in the text of `doc` (null off text). */
+  const charAt = (doc: string, x: number, y: number) => `((document) => {
+    const root = document.querySelector(${JSON.stringify(doc)});
+    const c = document.caretRangeFromPoint(${x}, ${y});
+    if (!c || c.startContainer.nodeType !== 3 || !root.contains(c.startContainer)) return null;
+    const pre = document.createRange(); pre.setStart(root, 0); pre.setEnd(c.startContainer, c.startOffset);
+    return pre.toString().length;
+  })(document)`;
+  /** How far (in lines) that character's line is from the point now: 0 = still under it. */
+  const lineOff = (doc: string, offset: number, y: number) => `((document) => {
+    const root = document.querySelector(${JSON.stringify(doc)});
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let left = ${offset};
+    for (let n = w.nextNode(); n; n = w.nextNode()) {
+      if (left < n.data.length) {
+        const r = document.createRange(); r.setStart(n, left); r.setEnd(n, Math.min(n.data.length, left + 1));
+        const b = r.getBoundingClientRect();
+        return ${y} >= b.top && ${y} <= b.bottom ? 0 : Math.round(((${y} < b.top ? b.top - ${y} : ${y} - b.bottom) / b.height) * 100) / 100 * (${y} < b.top ? -1 : 1);
+      }
+      left -= n.data.length;
+    }
+    return null;
+  })(document)`;
+  /** A point on a line of text about a third down the panel (`view`: an expression for the panel's box). */
+  const pointOnText = (doc: string, view: string) => `((document) => {
+    const v = ${view};
+    const y0 = v.top + v.height * 0.35;
+    const w = document.createTreeWalker(document.querySelector(${JSON.stringify(doc)}), NodeFilter.SHOW_TEXT);
+    let best = null;
+    for (let n = w.nextNode(); n; n = w.nextNode()) {
+      if (!n.data.trim()) continue;
+      const r = document.createRange();
+      r.selectNodeContents(n);
+      for (const b of r.getClientRects()) {
+        if (b.width < 60 || b.left < v.left || b.left + 40 > Math.min(v.left + v.width, innerWidth) || b.top < v.top || b.bottom > Math.min(v.top + v.height, innerHeight)) continue;
+        const d = Math.abs(b.top + b.height / 2 - y0);
+        if (!best || d < best.d) best = { d, x: Math.round(b.left + 30), y: Math.round(b.top + b.height / 2) };
+      }
+    }
+    return best;
+  })(document)`;
+  /** Ctrl+wheel steps as a trackpad pinch sends them: all in one task, or `gap` ms apart. */
+  const pinchSteps = (x: number, y: number, steps: readonly number[], gap: number) => `new Promise((done) => {
+    const target = document.elementFromPoint(${x}, ${y});
+    const steps = ${JSON.stringify(steps)};
+    let i = 0;
+    const step = () => {
+      target.dispatchEvent(new WheelEvent('wheel', { deltaY: steps[i], ctrlKey: true, clientX: ${x}, clientY: ${y}, bubbles: true, cancelable: true }));
+      if (++i < steps.length) ${gap} ? setTimeout(step, ${gap}) : step();
+      else done(true);
+    };
+    step();
+  })`;
+  /** Zoom in and out, at once and spread over time. */
+  const PINCHES = [
+    { steps: [-40, -40, -40, -40, -40, -40], gap: 0 },
+    { steps: [40, 40, 40, 40], gap: 0 },
+    { steps: [-25, -25, -25, -25, -25], gap: 12 },
+    { steps: [30, 30, 30], gap: 40 },
+    { steps: [-100], gap: 0 },
+  ] as const;
+  /** Where a point is on a PDF page: page number and fractions of the page (pages do not reflow). */
+  const pageSpotAt = (x: number, y: number) => `(() => {
+    const page = document.elementsFromPoint(${x}, ${y}).map((e) => e.closest('.reader.active .pdf-page')).find(Boolean);
+    if (!page) return null;
+    const b = page.getBoundingClientRect();
+    return { n: page.dataset.page, fx: (${x} - b.left) / b.width, fy: (${y} - b.top) / b.height };
+  })()`;
+  /** How far (px, [across, down]) that spot of its page is from the point now. */
+  const pageSpotOff = (spot: { n: string; fx: number; fy: number }, x: number, y: number) => `(() => {
+    const b = document.querySelector('.reader.active .pdf-page[data-page="${spot.n}"]').getBoundingClientRect();
+    return [Math.round(b.left + ${spot.fx} * b.width - ${x}), Math.round(b.top + ${spot.fy} * b.height - ${y})];
+  })()`;
+  /**
+   * Pinches over text. After each: for text, how many lines the character that was under the pointer
+   * is from it (0 = still under it; text that reflows can move a word to the next line); for PDF
+   * pages, how many pixels the spot of the page that was under the pointer is from it.
+   */
+  /** `cssPerScreen`: CSS pixels of the document per screen pixel (a web page's own zoom), 1 in the app. */
+  const zoomCheck = async (label: string, run: (code: string) => Promise<unknown>, doc: string, view: string, zoomNow: () => Promise<number>, settle: number, pages = false, cssPerScreen = async () => 1) => {
+    const offs: (number | null)[] = [];
+    const zooms: number[] = [];
+    for (const pinch of PINCHES) {
+      let p = null as { x: number; y: number } | null;
+      for (let i = 0; i < 100 && !p; i++) {
+        p = (await run(pointOnText(doc, view))) as typeof p;
+        if (!p) await sleep(100);
+      }
+      if (!p) throw new Error(`zoom ${label}: no text in view`);
+      const at = pages ? ((await run(pageSpotAt(p.x, p.y))) as { n: string; fx: number; fy: number }) : ((await run(charAt(doc, p.x, p.y))) as number | null);
+      const before = await zoomNow();
+      const k0 = await cssPerScreen();
+      await run(pinchSteps(p.x, p.y, pinch.steps, pinch.gap));
+      await sleep(settle);
+      const now = await zoomNow();
+      // The same screen point, in the document's coordinates now.
+      const k = (await cssPerScreen()) / k0;
+      const q = { x: p.x * k, y: p.y * k };
+      if (now === before) throw new Error(`zoom ${label}: the pinch did not zoom (${before})`);
+      zooms.push(now);
+      offs.push(at === null ? null : ((await run(pages ? pageSpotOff(at as { n: string; fx: number; fy: number }, q.x, q.y) : lineOff(doc, at as number, q.y))) as number | null));
+    }
+    log(`zoom ${label}: ${pages ? 'px [across, down]' : 'lines'} off`, JSON.stringify(offs), 'zooms', zooms.join(' '));
+    return offs;
+  };
+  const panelZoom = () => js<number>(`Number(document.querySelector('.reader.active').dataset.zoom)`);
+  const PANEL_VIEW = `document.querySelector('.reader.active .doc-scroll').getBoundingClientRect()`;
+  /** Zooming (pinches as a trackpad sends them, the PDF toolbar, Ctrl+0) keeps what is under the pointer in place. */
+  const zoomSteps = async () => {
+    // One panel, so that every check runs on a full-width reader.
+    await js(`document.querySelectorAll('.layout-switch [role=radio]')[0].click()`);
+    await js(`window.__glossaTest.openPath(${JSON.stringify(path.join(dir, 'long.md'))})`);
+    await waitFor('long md', `document.querySelectorAll('.reader.active .html-doc p').length > 100`);
+    await js(`(() => { const s = document.querySelector('.reader.active .doc-scroll'); s.scrollTop = s.scrollHeight * 0.45; })()`);
+    await sleep(300);
+    // Text reflows in a narrower or wider column: a word may go to the next line, never further.
+    const md = await zoomCheck('markdown', js, '.reader.active .html-doc', PANEL_VIEW, panelZoom, 300);
+    if (md.some((o) => o === null || Math.abs(o) > 1)) throw new Error(`markdown zoom moved the text: ${JSON.stringify(md)}`);
+
+    await js(`window.__glossaTest.openPath(${JSON.stringify(path.join(dir, 'long.pdf'))})`);
+    await waitFor('long pdf', `document.querySelectorAll('.reader.active .pdf-page').length === 80`, 20000);
+    await js(`(() => { const s = document.querySelector('.reader.active .doc-scroll'); s.scrollTop = s.scrollHeight * 0.5; })()`);
+    await waitFor('pdf text', `document.querySelectorAll('.reader.active .textLayer span').length > 0`, 20000);
+    await sleep(500);
+    // Down the page nothing moves; across, a page narrower than the panel stays centred as it grows.
+    const pdfOffs = (await zoomCheck('pdf', js, '.reader.active .pdf-pages', PANEL_VIEW, panelZoom, 1200, true)) as unknown as [number, number][];
+    if (pdfOffs.some((o) => !o || Math.abs(o[1]) > 3)) throw new Error(`pdf zoom moved the pages: ${JSON.stringify(pdfOffs)}`);
+    // The toolbar and Ctrl+0 keep the middle of the panel.
+    const mid = await js<{ x: number; y: number }>(`(() => { const b = ${PANEL_VIEW}; return { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) }; })()`);
+    for (const [how, act] of [
+      ['toolbar +', () => js(`document.querySelector('.reader.active button[title="Zoom in"]').click()`)],
+      ['Ctrl+0', async () => void wc.sendInputEvent({ type: 'keyDown', keyCode: '0', modifiers: ['control'] })],
+    ] as const) {
+      const spot = (await js(pageSpotAt(mid.x, mid.y))) as { n: string; fx: number; fy: number };
+      const z0 = await panelZoom();
+      await act();
+      await sleep(1200);
+      const off = (await js(pageSpotOff(spot, mid.x, mid.y))) as [number, number];
+      if ((await panelZoom()) === z0 || Math.abs(off[1]) > 3) throw new Error(`pdf ${how}: zoom ${z0}→${await panelZoom()}, moved ${JSON.stringify(off)}`);
+      log(`pdf ${how}: zoom ${z0}→${await panelZoom()}, middle of the panel moved [across, down]`, JSON.stringify(off));
+    }
+
+    await js(`window.__glossaTest.openUrl('https://${FIXTURE_HOST}/long')`);
+    const g = await (async () => {
+      for (let i = 0; i < 150; i++) {
+        const x = allContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL().endsWith('/long'));
+        if (x && !x.isLoading()) return x;
+        await sleep(100);
+      }
+      throw new Error('long page did not load');
+    })();
+    await g.executeJavaScript('window.scrollTo(0, document.documentElement.scrollHeight * 0.45)');
+    await sleep(300);
+    const web = await zoomCheck('web', (c) => g.executeJavaScript(c), 'body', `({ top: 0, left: 0, width: innerWidth, height: innerHeight })`, panelZoom, 900, false, async () => 1 / (await g.executeJavaScript('window.devicePixelRatio')));
+    if (web.some((o) => o === null || Math.abs(o) > 1)) throw new Error(`web zoom moved the page: ${JSON.stringify(web)}`);
+  };
+  // GLOSSA_ZOOM_DIAG=1: only the zoom checks (quick to run while working on zoom).
+  if (process.env.GLOSSA_ZOOM_DIAG) {
+    await zoomSteps();
+    return 0;
+  }
 
   // --- Markdown document: hotkey, span adjust, quick gloss, ELI5 ------------------
   await js(`window.__glossaTest.openPath(${JSON.stringify(path.join(dir, 'sample.md'))})`);
@@ -1105,6 +1269,10 @@ export async function runSmoke(win: BrowserWindow, deps: { store: Store; jobs: J
   if (!missing.includes('No Claude Code or Codex session')) throw new Error(`missing session: ${missing}`);
   await js(`document.querySelector('.error-bar button')?.click()`);
   log('Claude Code session opened from "claude --resume <id>": turns, folded tool call, term picked; unknown id explained');
+
+  // --- zoom keeps the reading position ------------------------------------------------
+  await zoomSteps();
+  log('zoom keeps what is under the pointer in place: markdown, pdf (pinch, toolbar, Ctrl+0), web page');
 
   // --- settings window ----------------------------------------------------------
   key('Escape');

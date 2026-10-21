@@ -9,6 +9,15 @@
 - 实际应用目录：本文件所在的 `glossa v2/glossa/`。上一级已有 `HANDOFF.md` 属于 fake-expert，保留原样，不用于本功能交接。（本次实施所在副本为 Linux arm64 无界面环境，上一级无该文件，也无双击启动脚本；双击验收须在 macOS 原机进行。）
 - 阶段 1 实施前快照：`glossa v2/.checkpoints/20261017-082331/before-multicard.tar.gz`（不含 `node_modules`）。实施前基线：`npm run typecheck` 通过，`npm test` 14 个文件 / 187 项通过。
 
+## 0g. 第九轮（2026-10-21）
+
+1. **缩放时页面会滚动**（用户报告的缺陷）：调试并修复；之后提供 Mac arm64 `.tar.gz`。
+
+## 0f. 第八轮需求（2026-10-21）
+
+1. **支持 PDF 网址**：`.pdf` 结尾的网址（及 arXiv PDF 链接、网页中点击的 PDF 链接）在 PDF 阅读器中打开。
+2. **macOS 可运行的压缩包**，并以 `./glossa/logo.png` 作为应用图标。产出 `release/Glossa-0.1.0-mac-arm64.tar.gz`（Apple 芯片）与 `-mac-x64.tar.gz`（Intel）；本机为 Linux，未在 Mac 上实际运行。
+
 ## 0e. 第七轮需求（2026-10-19）
 
 1. **识别编程 Agent 会话**（用户批准方案）：Claude Code（`~/.claude/projects/<项目>/<id>.jsonl`）与 Codex（`~/.codex/sessions/…/rollout-…-<id>.jsonl`）的会话文件以对话形式打开，可取词；地址栏可输入 `claude --resume <id>`、`codex resume <id>` 或单独的会话 ID，自动找到本机会话文件。网页会话链接（claude.ai/code、chatgpt.com/codex）仍按普通网页打开。

@@ -4,6 +4,7 @@ import { fitRect } from '../shared/card-geometry';
 import { dropTab, placeTab, REGIONS, resizePanels, showTab, type PanelCount, type Panels } from '../shared/panels';
 import { matchHotkey, parseHotkey } from '../shared/hotkey';
 import { clampZoom } from '../shared/pinch';
+import { anchorShift, takeAnchor, type ZoomAnchor } from '../shared/zoom-anchor';
 import { skillLabel } from '../shared/skills';
 import { createTermCapture, type TermCapture } from '../shared/term-capture';
 import { locatorFromContext } from '../shared/term-locate';
@@ -54,7 +55,8 @@ export function App() {
   // Zoom per document (pinch, Ctrl+wheel, Ctrl+= − 0), 1 = 100%.
   const [zoom, setZoomState] = useState<Record<string, number>>({});
   const zoomRef = useRef(zoom);
-  const zoomAnchor = useRef<{ tabId: string; x: number; y: number; cx: number; cy: number; k: number } | null>(null);
+  // What was under the pointer when a zoom started; put back under it once the panel has its new layout.
+  const zoomAnchor = useRef<{ tabId: string; scroller: HTMLElement; anchor: ZoomAnchor } | null>(null);
   // The panel under the mouse: Alt+Q picks there.
   const pointerTab = useRef<string | null>(null);
   const captureTab = useRef<string | null>(null);
@@ -219,33 +221,36 @@ export function App() {
     setZoomState(zoomRef.current);
   };
   /** One pinch step on a panel, keeping the point under the fingers in place. */
-  const zoomBy = (tabId: string, factor: number, x?: number, y?: number) => {
+  const zoomBy = (tabId: string, factor: number, x?: number, y?: number) => zoomTo(tabId, (zoomRef.current[tabId] ?? 1) * factor, x, y);
+  /** A new zoom for a panel; what is at the point (else the middle of the panel) stays where it is. */
+  const zoomTo = (tabId: string, zoom: number, x?: number, y?: number) => {
     const old = zoomRef.current[tabId] ?? 1;
-    const z = clampZoom(old * factor);
+    const z = clampZoom(zoom);
     if (z === old) return;
     const scroller = areaRef.current?.querySelector<HTMLElement>(`.reader[data-tab="${tabId}"] .doc-scroll`);
-    if (scroller) {
+    // Several pinch steps can arrive before the panel renders again: the first one's anchor,
+    // taken from what is shown, stays until then.
+    if (scroller && zoomAnchor.current?.tabId !== tabId) {
       const r = scroller.getBoundingClientRect();
-      const cx = (x ?? r.left + r.width / 2) - r.left;
-      const cy = (y ?? r.top + r.height / 2) - r.top;
-      zoomAnchor.current = { tabId, x: scroller.scrollLeft + cx, y: scroller.scrollTop + cy, cx, cy, k: z / old };
+      const anchor = takeAnchor(scroller, x ?? r.left + r.width / 2, y ?? r.top + r.height / 2);
+      zoomAnchor.current = anchor && { tabId, scroller, anchor };
     }
     setZoomFor(tabId, z);
   };
   useLayoutEffect(() => {
     const a = zoomAnchor.current;
     zoomAnchor.current = null;
-    const scroller = a && areaRef.current?.querySelector<HTMLElement>(`.reader[data-tab="${a.tabId}"] .doc-scroll`);
-    if (!a || !scroller) return;
-    scroller.scrollLeft = a.x * a.k - a.cx;
-    scroller.scrollTop = a.y * a.k - a.cy;
+    const shift = a && anchorShift(a.anchor);
+    if (!a || !shift) return;
+    a.scroller.scrollTop += shift.dy;
+    a.scroller.scrollLeft += shift.dx;
   }, [zoom]);
   useEffect(
     () =>
       api.app.onZoomKey((dir) => {
         const tabId = layoutRef.current.panels[layoutRef.current.active];
         if (!tabId) return;
-        if (dir === 'reset') setZoomFor(tabId, 1);
+        if (dir === 'reset') zoomTo(tabId, 1);
         else zoomBy(tabId, dir === 'in' ? 1.15 : 1 / 1.15);
       }),
     [],
@@ -601,7 +606,7 @@ export function App() {
                   tabId={tab.tabId}
                   zoom={z}
                   onChoose={(id) => setLayout({ panels: placeTab(layoutRef.current.panels, slot, id), active: slot })}
-                  onResetZoom={() => setZoomFor(tab.tabId, 1)}
+                  onResetZoom={() => zoomTo(tab.tabId, 1)}
                 />
               }
             >
@@ -628,7 +633,7 @@ export function App() {
                   onNavigate={onWebNavigate(tab)}
                 />
               ) : tab.doc.kind === 'pdf' ? (
-                <PdfReader doc={tab.doc} t={t} zoom={z} onZoom={(nz) => setZoomFor(tab.tabId, nz)} onText={onDocText(tab)} onHandle={handleFor(tab.tabId)} />
+                <PdfReader doc={tab.doc} t={t} zoom={z} onZoom={(nz) => zoomTo(tab.tabId, nz)} onText={onDocText(tab)} onHandle={handleFor(tab.tabId)} />
               ) : (
                 <HtmlReader doc={tab.doc} t={t} zoom={z} onText={onDocText(tab)} onHandle={handleFor(tab.tabId)} />
               )}

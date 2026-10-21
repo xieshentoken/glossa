@@ -1,7 +1,7 @@
 // Runs inside web pages shown in the reader (<webview>). Isolated from the
 // page's own scripts. Picks terms and reports page text to the host.
 
-import { ipcRenderer } from 'electron';
+import { ipcRenderer, webFrame } from 'electron';
 import { matchHotkey, parseHotkey } from '../shared/hotkey';
 import { createTermCapture, type TermCapture } from '../shared/term-capture';
 import { areaText } from '../shared/area-text';
@@ -9,6 +9,7 @@ import { findTerm, flashBoxes, flashRange, pageRegionRect, scrollToBox, scrollTo
 import type { TermLocator } from '../shared/types';
 import { cleanExtracted } from '../shared/text';
 import { attachPinch } from '../shared/pinch';
+import { anchorShift, takeAnchor, type ZoomAnchor } from '../shared/zoom-anchor';
 import { createTextReporter } from '../shared/text-watch';
 
 let capture: TermCapture | null = null;
@@ -122,8 +123,76 @@ window.addEventListener('mouseout', (e) => {
   ipcRenderer.sendToHost('glossa:pointer', false);
 });
 
-// Pinch-to-zoom inside the page zooms this reading panel (the host applies it).
-attachPinch(window, (factor, x, y) => ipcRenderer.sendToHost('glossa:zoom', { factor, x, y }));
+// Pinch-to-zoom inside the page zooms this reading panel (the host decides the zoom).
+let lastPinch: { x: number; y: number; t: number } | null = null;
+attachPinch(window, (factor, x, y) => {
+  lastPinch = { x, y, t: performance.now() };
+  ipcRenderer.sendToHost('glossa:zoom', { factor, x, y });
+});
+
+// The panel's zoom, applied here so that the spot under the pinch (or the middle of the page)
+// stays where it is. A pinch sends many steps: its first anchor stays until the page has the
+// new zoom; then the page (or the scrolling box holding that spot) scrolls it back, and keeps
+// it there for a moment while the page finishes its layout, unless the reader scrolls.
+/**
+ * `dpr`: devicePixelRatio per unit of zoom (the screen's own scale); `since`: the last zoom step;
+ * `settled`: when the page showed the new zoom. Checked on a timer: animation frames can pause.
+ */
+let zooming: { a: ZoomAnchor; from: number; to: number; dpr: number; since: number; settled?: number } | null = null;
+const SETTLE_TICK = 16;
+/** Zoom steps further apart than this are a new pinch, with its own anchor. */
+const NEW_PINCH_MS = 250;
+ipcRenderer.on('glossa:zoomTo', (_e, msg: unknown) => {
+  const to = Number((msg as { zoom?: unknown } | null)?.zoom);
+  if (!Number.isFinite(to) || to <= 0) return;
+  const from = webFrame.getZoomFactor();
+  if (zooming && performance.now() - zooming.since > NEW_PINCH_MS) zooming = null;
+  if (zooming) {
+    zooming.to = to;
+    zooming.since = performance.now();
+    zooming.settled = undefined;
+  } else if (Math.abs(from - to) > 1e-3) {
+    const p = lastPinch && performance.now() - lastPinch.t < 1000 ? lastPinch : { x: innerWidth / 2, y: innerHeight / 2 };
+    const a = document.documentElement && takeAnchor(document.documentElement, p.x, p.y);
+    if (a) {
+      zooming = { a, from, to, dpr: window.devicePixelRatio / from, since: performance.now() };
+      setTimeout(settleZoom, SETTLE_TICK);
+    }
+  }
+  webFrame.setZoomFactor(to);
+  ipcRenderer.sendToHost('glossa:zoomed', to);
+});
+function settleZoom(): void {
+  const z = zooming;
+  if (!z) return;
+  const now = performance.now();
+  // Wait until the page is laid out at the new zoom (devicePixelRatio follows it), at most 1.5 s.
+  if (Math.abs(window.devicePixelRatio - z.dpr * z.to) > 0.005 && now - z.since < 1500) {
+    setTimeout(settleZoom, SETTLE_TICK);
+    return;
+  }
+  z.settled ??= now;
+  // The same screen spot is at other CSS pixels now.
+  const k = z.from / webFrame.getZoomFactor();
+  const shift = anchorShift({ ...z.a, x: z.a.x * k, y: z.a.y * k });
+  if (shift && (Math.abs(shift.dx) > 0.5 || Math.abs(shift.dy) > 0.5)) scrollerOf(z.a.el).scrollBy(shift.dx, shift.dy);
+  if (shift && now - z.settled < 300) setTimeout(settleZoom, SETTLE_TICK);
+  else zooming = null;
+}
+// The reader scrolling (or clicking, typing) takes over from the zoom's hold.
+const stopHolding = (e: Event) => {
+  if (!(e instanceof WheelEvent && e.ctrlKey)) zooming = null;
+};
+for (const type of ['wheel', 'pointerdown', 'keydown', 'touchmove']) window.addEventListener(type, stopHolding, { capture: true, passive: true });
+
+/** The box that scrolls an element: its nearest scrolling ancestor, else the page. */
+function scrollerOf(el: Element): Element | Window {
+  for (let e = el.parentElement; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+    const st = getComputedStyle(e);
+    if (/(auto|scroll|overlay)/.test(st.overflowY + st.overflowX) && (e.scrollHeight > e.clientHeight || e.scrollWidth > e.clientWidth)) return e;
+  }
+  return window;
+}
 
 window.addEventListener('DOMContentLoaded', () => {
   // Two fingers zoom the panel; one finger still scrolls the page.

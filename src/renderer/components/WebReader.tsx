@@ -45,6 +45,8 @@ export function WebReader(props: {
   const [nav, setNav] = useState({ back: false, fwd: false });
   // Requests waiting for the page's answer.
   const waiting = useRef(new Map<number, (r: unknown) => void>());
+  /** The zoom the page last said it applied itself. */
+  const pageZoom = useRef(0);
   const config = () => ({ hotkey: cb.current.hotkey, hint: cb.current.t('captureHint'), locateHotkey: cb.current.locateHotkey, captureHotkey: cb.current.captureHotkey });
 
   useEffect(() => {
@@ -68,6 +70,8 @@ export function WebReader(props: {
         const z = e.args[0] as { factor: number; x: number; y: number };
         const box = wv.getBoundingClientRect();
         if (Number.isFinite(z.factor) && z.factor > 0) cb.current.onZoomBy(z.factor, z.x + box.left, z.y + box.top);
+      } else if (e.channel === 'glossa:zoomed') {
+        pageZoom.current = Number(e.args[0]);
       } else if (e.channel === 'glossa:located' || e.channel === 'glossa:areaText') {
         const r = e.args[0] as { id: number };
         waiting.current.get(r.id)?.(r);
@@ -99,11 +103,25 @@ export function WebReader(props: {
   }, [props.preloadUrl]);
 
   useEffect(() => {
+    const wv = viewRef.current as (WebviewEl & { setZoomFactor(f: number): void }) | null;
+    if (!wv) return;
+    // The page zooms itself, keeping the spot under the pinch (or its middle) in place.
     try {
-      (viewRef.current as unknown as { setZoomFactor(f: number): void } | null)?.setZoomFactor(props.zoom);
+      wv.send('glossa:zoomTo', { zoom: props.zoom });
     } catch {
-      // not attached yet; dom-ready applies it
+      // not attached yet; dom-ready applies the zoom
     }
+    // In case the page could not (still loading, or without the preload): the zoom from here, shortly after.
+    // Not when it did: setting it again would lay the page out once more, without the anchor.
+    const id = setTimeout(() => {
+      if (Math.abs(pageZoom.current - cb.current.zoom) < 1e-3) return;
+      try {
+        wv.setZoomFactor(cb.current.zoom);
+      } catch {
+        // not attached yet; dom-ready applies it
+      }
+    }, 500);
+    return () => clearTimeout(id);
   }, [props.zoom]);
 
   useEffect(() => {

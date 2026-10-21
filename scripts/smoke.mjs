@@ -21,6 +21,9 @@ fs.writeFileSync(
   ]),
 );
 
+// Long enough to scroll, with paragraphs of different lengths (zoom keeps the point under the pointer).
+const prose = (i) => `Paragraph ${i}. ` + 'Viscous stresses near the wall slow the fluid and the boundary layer thickens downstream. '.repeat(1 + (i % 5));
+fs.writeFileSync(path.join(fixtures, 'long.md'), `# Long notes\n\n${Array.from({ length: 120 }, (_, i) => prose(i + 1)).join('\n\n')}\n`);
 // Served from the fixture web host: a typed .pdf address and a PDF link on a page.
 fs.writeFileSync(path.join(fixtures, 'web.pdf'), makePdf(['Boundary layers', 'Near a wall, viscosity slows the flow to rest.']));
 fs.writeFileSync(path.join(fixtures, 'web2.pdf'), makePdf(['Drag', 'Form drag grows with the wake behind a body.']));
@@ -56,7 +59,7 @@ function launch(phase) {
     const timer = setTimeout(() => {
       console.error('smoke: timeout');
       child.kill('SIGKILL');
-    }, 120_000);
+    }, 300_000);
     child.stdout.on('data', (d) => process.stdout.write(d));
     child.stderr.on('data', (d) => {
       for (const line of d.toString().split('\n')) {
